@@ -1,9 +1,10 @@
 [project]
-name = "projcode-uco"
+name = "SEG_514143"
 version = "0.1.0"
-description = ""
-readme = "README.md"
-requires-python = ">=3.11"
+description = "PA228 course segmentation project"
+authors = [
+    {name = "Matěj Kubík", email = "matej.kubik@mail.muni.cz"},
+]
 dependencies = [
     "graphviz>=0.20.3",
     "matplotlib>=3.10.1",
@@ -12,3 +13,10 @@ dependencies = [
     "torch>=2.6.0",
     "torchview>=0.2.6",
 ]
+requires-python = "==3.14.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
