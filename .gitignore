@@ -219,6 +219,7 @@ __marimo__/
 
 # data
 **/data/*
+**/data_seg_public/*
 
 # Other course materials
 tutorials/*
