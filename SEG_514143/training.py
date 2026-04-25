@@ -80,6 +80,7 @@ CONFIG: dict[str, Any] = {
     "cuda_cudnn_benchmark": True,
     "cuda_compile_model": False,
     "log_runtime_metadata": True,
+    "preload_samples": device.type == "mps",  # Preload samples into memory for faster access on MPS, where disk I/O is slow. 
 }
 
 
@@ -601,8 +602,8 @@ def training(dataset_path: Path) -> None:
             std=(0.229, 0.224, 0.225))])
 
     # dataset and dataloader
-    train_dataset = SegDataset(train_df, transforms=train_transforms)
-    val_dataset = SegDataset(val_df, transforms=val_transforms)
+    train_dataset = SegDataset(train_df, transforms=train_transforms, preload_samples=CONFIG["preload_samples"])
+    val_dataset = SegDataset(val_df, transforms=val_transforms, preload_samples=CONFIG["preload_samples"])
 
     is_cuda = device.type == "cuda"
     num_workers = CONFIG["cuda_num_workers"] if is_cuda else CONFIG["other_num_workers"]

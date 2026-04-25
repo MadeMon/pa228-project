@@ -19,13 +19,13 @@ from torch.utils.data import Dataset
 
 
 class SegDataset(Dataset[tuple[Tensor, Tensor]]):
-    def __init__(self, df: DataFrame, transforms: Compose | None = None) -> None:
+    def __init__(self, df: DataFrame, transforms: Compose | None = None, preload_samples: bool = False) -> None:
         self.df = df.reset_index(drop=True)
         self.transforms = transforms
         self.color_to_class = {
             color: class_idx for class_idx, color in enumerate(label_dict.values())
         }
-        self.samples = self._preload_samples()
+        self.samples = self._preload_samples() if preload_samples else []
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -85,7 +85,12 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
         return [sample for _, sample in loaded]
 
     def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
-        sample = self.samples[idx]
+        if self.samples:
+            sample = self.samples[idx]
+        else:
+            row = self.df.iloc[idx]
+            sample = self._load_single_sample(Path(row.img_path), Path(row.mask_path))
+
         image = sample["image"].copy()
         mask = sample["mask"].copy()
 
