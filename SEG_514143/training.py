@@ -38,6 +38,14 @@ import mlflow
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+mlflow.login(backend="databricks", interactive=False)
+mlflow.set_experiment(f"/Users/{os.getenv('DATABRICKS_MLFLOW_USERNAME')}/segmentation_experiment")    
+
 # fix seeds for reproducibility
 torch.manual_seed(42)
 np.random.seed(42)
@@ -532,10 +540,6 @@ def training(dataset_path: Path) -> None:
 
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = bool(CONFIG["cuda_cudnn_benchmark"])
-
-    # initialize MLflow tracking
-    mlflow.set_tracking_uri("http://localhost:5000")
-    mlflow.set_experiment("segmentation_experiment")
 
     df = create_dataframe(dataset_path)
 

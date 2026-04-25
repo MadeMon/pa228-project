@@ -1,0 +1,13 @@
+{
+    "configurations": [
+        {
+            "name": "Debug Training",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "training.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/SEG_514143",
+            "args": "data_seg_public"
+        }
+    ]
+}

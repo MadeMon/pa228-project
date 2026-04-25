@@ -18,6 +18,8 @@ dependencies = [
     "torchvision",
     "mlflow",
     "types-tqdm>=4.67.3.20260408",
+    "databricks-sdk>=0.105.0",
+    "python-dotenv>=1.2.2",
 ]
 requires-python = "==3.14.*"
 readme = "README.md"
