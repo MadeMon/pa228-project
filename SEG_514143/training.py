@@ -6,11 +6,12 @@
 
 from argparse import ArgumentParser
 from collections.abc import Callable, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 import datetime
 from pathlib import Path
 import random
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, cast
 
 import cv2
 import matplotlib.pyplot as plt
@@ -50,22 +51,64 @@ CONFIG: dict[str, Any] = {
     "epochs": 500,
     "learning_rate": 1e-3,
     "optimizer_weight_decay": 1e-4,
-    "transforms_random_crop_size": 256, # 512, 256, None
+    "transforms_random_crop_size": 256,  # 512, 256, None
     "transforms_rare_crop_prob": 0.5,
     "rare_classes": [
-        3,   # object
-        6,   # human
+        3,  # object
+        6,  # human
     ],
-    "debug_dir_rare_crops": None, # "debug_rare_crops", None
-    "class_ignore_index": 0, # 0 is the "void" class
-    "test_mode": False, # use subset of 10 samples to test the training pipeline - try to overfit the model on this tiny dataset, if it doesn't work, there is likely a bug in the training pipeline
+    "debug_dir_rare_crops": None,  # "debug_rare_crops", None
+    "class_ignore_index": 0,  # 0 is the "void" class
+    "test_mode": False,  # use subset of 10 samples to test the training pipeline - try to overfit the model on this tiny dataset, if it doesn't work, there is likely a bug in the training pipeline
     "model_checkpoint_path": "models",
+    "cuda_use_amp": True,
+    "cuda_use_grad_scaler": True,
+    "cuda_pin_memory": True,
+    "cuda_non_blocking_transfer": True,
+    "cuda_num_workers": 4,
+    "other_num_workers": 0,
+    "cuda_prefetch_factor": 2,
+    "cuda_persistent_workers": True,
+    "cuda_cudnn_benchmark": True,
+    "cuda_compile_model": False,
+    "log_runtime_metadata": True,
 }
 
 
+def create_data_loaders(
+    train_dataset: SegDataset,
+    val_dataset: SegDataset,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+    is_cuda: bool,
+) -> Tuple[DataLoader, DataLoader, dict[str, Any], dict[str, Any]]:
+    train_loader_kwargs: dict[str, Any] = {
+        "batch_size": batch_size,
+        "shuffle": True,
+        "num_workers": num_workers,
+    }
+    val_loader_kwargs: dict[str, Any] = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "num_workers": num_workers,
+    }
 
+    if pin_memory:
+        train_loader_kwargs["pin_memory"] = True
+        val_loader_kwargs["pin_memory"] = True
 
+    if num_workers > 0:
+        persistent_workers = bool(is_cuda and CONFIG["cuda_persistent_workers"])
+        train_loader_kwargs["persistent_workers"] = persistent_workers
+        val_loader_kwargs["persistent_workers"] = persistent_workers
+        if is_cuda:
+            train_loader_kwargs["prefetch_factor"] = CONFIG["cuda_prefetch_factor"]
+            val_loader_kwargs["prefetch_factor"] = CONFIG["cuda_prefetch_factor"]
 
+    train_dataloader = DataLoader(train_dataset, **train_loader_kwargs)
+    val_dataloader = DataLoader(val_dataset, **val_loader_kwargs)
+    return train_dataloader, val_dataloader, train_loader_kwargs, val_loader_kwargs
 
 
 @dataclass
@@ -268,16 +311,18 @@ def update_confusion_matrix(
 # sample function for training
 def fit(
     net: nn.Module,
-    batch_size: int,
     epochs: int,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
     loss: nn.Module,
     optimizer: Optimizer,
-    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
+    scheduler: Optional[torch.optim.lr_scheduler.LRScheduler],
     device: torch.device,
     metrics: list[Callable[[Tensor, Tensor], dict[str, float]]] | None = None,
     checkpoint_path: Optional[Path] = None,
+    use_amp: bool = False,
+    use_grad_scaler: bool = False,
+    use_non_blocking_transfer: bool = False,
 ) -> tuple[list[float], list[float]]:
     train_losses: list[float] = []
     val_losses: list[float] = []
@@ -286,14 +331,28 @@ def fit(
 
     net = net.to(device)
     loss = loss.to(device)
+    use_amp = bool(use_amp and device.type == "cuda")
+    use_grad_scaler = bool(use_grad_scaler and use_amp and device.type == "cuda")
+    scaler: torch.cuda.amp.GradScaler | None = None
+    if use_grad_scaler:
+        scaler = torch.cuda.amp.GradScaler(enabled=True)
 
-    def run_epoch(dataloader: DataLoader, is_train: bool) -> tuple[float, dict[str, list[MetricResult]], np.ndarray | None, dict[str, float]]:
+    def autocast_context() -> Any:
+        if use_amp:
+            return torch.autocast(device_type="cuda", dtype=torch.float16)
+        return nullcontext()
+
+    def run_epoch(
+        dataloader: DataLoader, is_train: bool
+    ) -> tuple[
+        float, dict[str, list[MetricResult]], torch.Tensor | None, dict[str, float]
+    ]:
         running_loss = 0.0
         batches = 0
         metrics_results: dict[str, list[MetricResult]] = {}
         for metric_fn in metrics or []:
             metrics_results[metric_fn.__name__] = []
-        
+
         # Initialize confusion matrix for validation (will be properly sized after first batch)
         accumulated_cm = None
 
@@ -308,31 +367,42 @@ def fit(
             for images, targets in tqdm(dataloader, desc="{} Batches".format("Training" if is_train else "Validation")):
                 batch_start = time.perf_counter()
 
+                if is_train:
+                    optimizer.zero_grad(set_to_none=True)
+
                 # Measure device transfer time
                 t0 = time.perf_counter()
-                images = images.to(device)
-                targets = targets.to(device)
+                images = images.to(device, non_blocking=use_non_blocking_transfer)
+                targets = targets.to(device, non_blocking=use_non_blocking_transfer)
                 t1 = time.perf_counter()
 
                 # Forward pass
                 t2 = time.perf_counter()
-                preds_out = net(images)
+                with autocast_context():
+                    preds_out = net(images)
                 t3 = time.perf_counter()
 
                 # Loss computation (and auxiliary loss if present)
                 t4 = time.perf_counter()
-                if isinstance(preds_out, dict):
-                    total_loss = loss(preds_out["out"], targets)
-                    if "aux" in preds_out and preds_out["aux"] is not None:
-                        total_loss = total_loss + 0.4 * loss(preds_out["aux"], targets)
-                else:
-                    total_loss = loss(preds_out, targets)
+                with autocast_context():
+                    if isinstance(preds_out, dict):
+                        total_loss = loss(preds_out["out"], targets)
+                        if "aux" in preds_out and preds_out["aux"] is not None:
+                            total_loss = total_loss + 0.4 * loss(
+                                preds_out["aux"], targets
+                            )
+                    else:
+                        total_loss = loss(preds_out, targets)
                 t5 = time.perf_counter()
 
                 if is_train:
-                    optimizer.zero_grad()
-                    total_loss.backward()
-                    optimizer.step()
+                    if scaler is not None:
+                        scaler.scale(total_loss).backward()
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        total_loss.backward()
+                        optimizer.step()
 
                 running_loss += total_loss.item()
                 batches += 1
@@ -398,20 +468,24 @@ def fit(
             print("Validation metrics:")
             print(f"\tmIoU: {mlou_result.main:.4f}")
             mlflow.log_metric("mIoU", mlou_result.main, step=epoch)
-            
+
             if mlou_result.per_class is not None:
                 for cls, value in mlou_result.per_class.items():
                     mlflow.log_metric(f"mIoU_class_{cls}", value, step=epoch)
                     print(f"\t\tClass {cls}: {value:.4f}")
-            
+
             # Plot and log confusion matrix
             cm_fig = plot_confusion_matrix(val_confusion_matrix, num_classes=val_confusion_matrix.shape[0])
             mlflow.log_figure(cm_fig, f"confusion_matrix_epoch_{epoch}.png")
             plt.close(cm_fig)
-            
+
             # Save confusion matrix as numpy
             cm_npy_path = f"confusion_matrix_epoch_{epoch}.npy"
-            np.save(cm_npy_path, val_confusion_matrix)
+            if isinstance(val_confusion_matrix, torch.Tensor):
+                cm_to_save = val_confusion_matrix.detach().cpu().numpy()
+            else:
+                cm_to_save = val_confusion_matrix
+            np.save(cm_npy_path, cm_to_save)
             mlflow.log_artifact(cm_npy_path)
 
             # Log validation timing breakdown
@@ -437,7 +511,6 @@ def fit(
         if scheduler is not None:
             scheduler.step()
 
-
     print("Training finished!")
     return train_losses, val_losses
 
@@ -456,6 +529,9 @@ def training(dataset_path: Path) -> None:
     """
     # Check for available GPU
     print("Computing with {}!".format(device))
+
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = bool(CONFIG["cuda_cudnn_benchmark"])
 
     # initialize MLflow tracking
     mlflow.set_tracking_uri("http://localhost:5000")
@@ -515,7 +591,6 @@ def training(dataset_path: Path) -> None:
         A.Normalize(mean=(0.485, 0.456, 0.406),
             std=(0.229, 0.224, 0.225)),
     )
-    
 
     train_transforms = A.Compose(train_transforms_list)
     val_transforms = A.Compose([A.Normalize(mean=(0.485, 0.456, 0.406),
@@ -525,8 +600,20 @@ def training(dataset_path: Path) -> None:
     train_dataset = SegDataset(train_df, transforms=train_transforms)
     val_dataset = SegDataset(val_df, transforms=val_transforms)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=CONFIG["batch_size"], shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=CONFIG["batch_size"], shuffle=False)
+    is_cuda = device.type == "cuda"
+    num_workers = CONFIG["cuda_num_workers"] if is_cuda else CONFIG["other_num_workers"]
+    pin_memory = bool(is_cuda and CONFIG["cuda_pin_memory"])
+
+    train_dataloader, val_dataloader, train_loader_kwargs, val_loader_kwargs = (
+        create_data_loaders(
+            train_dataset,
+            val_dataset,
+            CONFIG["batch_size"],
+            num_workers,
+            pin_memory,
+            is_cuda,
+        )
+    )
 
     net = ModelLRASPP()
 
@@ -534,10 +621,29 @@ def training(dataset_path: Path) -> None:
     input_sample = torch.zeros((1, 3, 512, 1024))
     draw_network_architecture(net, input_sample)
 
+    train_net: nn.Module = net
+    compile_enabled = False
+    if is_cuda and CONFIG["cuda_compile_model"]:
+        if hasattr(torch, "compile"):
+            try:
+                train_net = cast(nn.Module, torch.compile(net))
+                compile_enabled = True
+                print("Enabled torch.compile for CUDA training.")
+            except Exception as exc:
+                print(f"torch.compile failed, using eager mode: {exc}")
+        else:
+            print(
+                "torch.compile is not available in this PyTorch build; using eager mode."
+            )
+
     class_weights = compute_class_weights(train_dataset, num_classes=len(train_dataset.color_to_class))
 
     # optimizer and learning rate
-    optimizer = torch.optim.AdamW(net.parameters(), lr=CONFIG["learning_rate"], weight_decay=CONFIG["optimizer_weight_decay"])
+    optimizer = torch.optim.AdamW(
+        train_net.parameters(),
+        lr=CONFIG["learning_rate"],
+        weight_decay=CONFIG["optimizer_weight_decay"],
+    )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
 
     # loss function
@@ -550,10 +656,50 @@ def training(dataset_path: Path) -> None:
     # checkpoint path
     checkpoint_path = Path(f"{CONFIG['model_checkpoint_path']}/{datetime.datetime.now().strftime('%m%d_%H%M%S')}") if CONFIG["model_checkpoint_path"] else None
 
+    use_amp = bool(is_cuda and CONFIG["cuda_use_amp"])
+    use_grad_scaler = bool(use_amp and CONFIG["cuda_use_grad_scaler"])
+    use_non_blocking_transfer = bool(
+        is_cuda and pin_memory and CONFIG["cuda_non_blocking_transfer"]
+    )
+
+    runtime_metadata: dict[str, Any] = {
+        "runtime_device": device.type,
+        "runtime_amp": use_amp,
+        "runtime_grad_scaler": use_grad_scaler,
+        "runtime_compile": compile_enabled,
+        "runtime_num_workers": num_workers,
+        "runtime_pin_memory": pin_memory,
+        "runtime_persistent_workers": train_loader_kwargs.get(
+            "persistent_workers", False
+        ),
+        "runtime_prefetch_factor": train_loader_kwargs.get("prefetch_factor", "none"),
+        "runtime_cudnn_benchmark": torch.backends.cudnn.benchmark if is_cuda else "n/a",
+    }
+
+    print("Runtime metadata:")
+    for key, value in runtime_metadata.items():
+        print(f"\t{key}: {value}")
+
     with mlflow.start_run():
+        if CONFIG["log_runtime_metadata"]:
+            for key, value in runtime_metadata.items():
+                mlflow.log_param(key, value)
+
         # train the network
         train_losses, val_losses = fit(
-            net, CONFIG["batch_size"], CONFIG["epochs"], train_dataloader, val_dataloader, loss, optimizer, scheduler, device, metrics, checkpoint_path=checkpoint_path
+            train_net,
+            CONFIG["epochs"],
+            train_dataloader,
+            val_dataloader,
+            loss,
+            optimizer,
+            scheduler,
+            device,
+            metrics,
+            checkpoint_path=checkpoint_path,
+            use_amp=use_amp,
+            use_grad_scaler=use_grad_scaler,
+            use_non_blocking_transfer=use_non_blocking_transfer,
         )
 
     # save the trained model and plot the losses, feel free to create your own functions
