@@ -343,9 +343,9 @@ def fit(
     loss = loss.to(device)
     use_amp = bool(use_amp and device.type == "cuda")
     use_grad_scaler = bool(use_grad_scaler and use_amp and device.type == "cuda")
-    scaler: torch.cuda.amp.GradScaler | None = None
+    scaler: torch.amp.GradScaler | None = None
     if use_grad_scaler:
-        scaler = torch.cuda.amp.GradScaler(enabled=True)
+        scaler = torch.amp.GradScaler(device="cuda", enabled=True)
 
     def autocast_context() -> Any:
         if use_amp:
