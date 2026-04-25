@@ -51,6 +51,7 @@ torch.manual_seed(42)
 np.random.seed(42)
 random.seed(42)
 
+import multiprocessing
 
 TRAINING_SCHEDULER: Any | None = None
 
@@ -73,7 +74,7 @@ CONFIG: dict[str, Any] = {
     "cuda_use_grad_scaler": True,
     "cuda_pin_memory": True,
     "cuda_non_blocking_transfer": True,
-    "cuda_num_workers": 4,
+    "cuda_num_workers": multiprocessing.cpu_count() - 1,  # Use all but one CPU core for data loading when using CUDA
     "other_num_workers": 0,
     "cuda_prefetch_factor": 2,
     "cuda_persistent_workers": True,
