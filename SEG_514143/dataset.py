@@ -28,7 +28,7 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
         self.samples = self._preload_samples() if preload_samples else []
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.df)
 
     def _rgb_mask_to_class(self, mask_rgb: np.ndarray, mask_path: Path) -> np.ndarray:
         class_mask = np.full(mask_rgb.shape[:2], -1, dtype=np.int64)
