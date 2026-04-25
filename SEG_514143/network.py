@@ -5,6 +5,7 @@
 
 from torch import Tensor, nn
 from torchvision.models.segmentation import lraspp_mobilenet_v3_large
+from torchvision.models import MobileNet_V3_Large_Weights
 
 from label_dict import label_dict
 
