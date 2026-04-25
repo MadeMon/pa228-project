@@ -5,17 +5,194 @@
 # Usage: python training.py <dataset_path>
 
 from argparse import ArgumentParser
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+import datetime
 from pathlib import Path
+import random
+from typing import Any, Optional, Tuple
 
+import cv2
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
-from dataset import SampleDataset
-from network import ModelExample
+from tqdm import tqdm
+import time
+from losses import HybridSegmentationLoss, compute_class_weights
+from rare_crops import MixedCropTransform
+from dataset import SegDataset
+from network import ModelLRASPP
 from torch import Tensor, nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torchview import draw_graph
 
+
+from utils import create_dataframe, device, save_checkpoint
+
+import albumentations as A
+
+import mlflow
+
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
+# fix seeds for reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
+
+
+TRAINING_SCHEDULER: Any | None = None
+
+CONFIG: dict[str, Any] = {
+    "batch_size": 32,
+    "epochs": 500,
+    "learning_rate": 1e-3,
+    "optimizer_weight_decay": 1e-4,
+    "transforms_random_crop_size": 256, # 512, 256, None
+    "transforms_rare_crop_prob": 0.5,
+    "rare_classes": [
+        3,   # object
+        6,   # human
+    ],
+    "debug_dir_rare_crops": None, # "debug_rare_crops", None
+    "class_ignore_index": 0, # 0 is the "void" class
+    "test_mode": False, # use subset of 10 samples to test the training pipeline - try to overfit the model on this tiny dataset, if it doesn't work, there is likely a bug in the training pipeline
+    "model_checkpoint_path": "models",
+}
+
+
+
+
+
+
+
+@dataclass
+class MetricResult:
+    main: float
+    per_class: dict[int, float] | None = None
+
+
+def aggregate_metric_results(results: list["MetricResult"]) -> "MetricResult":
+    main = float(np.mean([r.main for r in results]))
+    if results and results[0].per_class is not None:
+        all_classes = results[0].per_class.keys()
+        per_class = {
+            cls: float(np.mean([r.per_class[cls] for r in results if cls in r.per_class]))
+            for cls in all_classes
+        }
+    else:
+        per_class = None
+    return MetricResult(main=main, per_class=per_class)
+
+def split_dataframe(df, train_ratio: float = 0.7, val_ratio: float = 0.2):
+    total_samples = len(df)
+    train_size = int(total_samples * train_ratio)
+    val_size = int(total_samples * val_ratio)
+
+    permutation = torch.randperm(total_samples)
+    train_idx = permutation[:train_size].tolist()
+    val_idx = permutation[train_size:train_size + val_size].tolist()
+    test_idx = permutation[train_size + val_size:].tolist()
+
+    train_df = df.iloc[train_idx].reset_index(drop=True)
+    val_df = df.iloc[val_idx].reset_index(drop=True)
+    test_df = df.iloc[test_idx].reset_index(drop=True)
+    return train_df, val_df, test_df
+
+def compute_mlou_from_cm(
+    confusion_matrix: Tensor | np.ndarray, ignore_index: int | None = None
+) -> MetricResult:
+    """Compute mean IoU from accumulated confusion matrix.
+    
+    Args:
+        confusion_matrix: Accumulated confusion matrix of shape (num_classes, num_classes)
+        ignore_index: Class index to ignore when computing mean
+    
+    Returns:
+        MetricResult with mean IoU and per-class IoU dict
+    """
+    if isinstance(confusion_matrix, torch.Tensor):
+        cm = confusion_matrix.detach().cpu().numpy()
+    else:
+        cm = confusion_matrix
+
+    num_classes = cm.shape[0]
+    ious: dict[int, float] = {}
+    
+    for cls in range(num_classes):
+        if ignore_index is not None and cls == ignore_index:
+            continue
+        
+        # TP: diagonal element, FP: sum of column minus TP, FN: sum of row minus TP
+        tp = cm[cls, cls]
+        fp = cm[:, cls].sum() - tp
+        fn = cm[cls, :].sum() - tp
+        
+        denominator = tp + fp + fn
+        if denominator > 0:
+            ious[cls] = float(tp / denominator)
+        else:
+            ious[cls] = 0.0
+    
+    mean_iou = float(np.mean(list(ious.values()))) if ious else 0.0
+    return MetricResult(main=mean_iou, per_class=ious)
+
+
+def plot_confusion_matrix(
+    confusion_matrix: Tensor | np.ndarray, num_classes: int, class_names: list[str] | None = None
+) -> plt.Figure:
+    """Plot confusion matrix as a heatmap.
+    
+    Args:
+        confusion_matrix: Confusion matrix of shape (num_classes, num_classes)
+        num_classes: Number of classes
+        class_names: Optional list of class names for labels
+    
+    Returns:
+        Matplotlib figure object
+    """
+    if isinstance(confusion_matrix, torch.Tensor):
+        cm = confusion_matrix.detach().cpu().numpy()
+    else:
+        cm = confusion_matrix
+
+    # Normalize CM by row (per true class) for better visualization
+    cm_normalized = cm.astype(float)
+    row_sums = cm_normalized.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1  # Avoid division by zero
+    cm_normalized = cm_normalized / row_sums
+    
+    fig, ax = plt.subplots(figsize=(12, 10))
+    im = ax.imshow(cm_normalized, cmap="Blues", aspect="auto")
+    
+    # Set ticks and labels
+    ticks = np.arange(num_classes)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+    
+    if class_names is not None:
+        ax.set_xticklabels(class_names, rotation=45, ha="right")
+        ax.set_yticklabels(class_names)
+    
+    ax.set_xlabel("Predicted Class")
+    ax.set_ylabel("True Class")
+    ax.set_title("Confusion Matrix (Normalized by True Class)")
+    
+    # Add colorbar
+    plt.colorbar(im, ax=ax)
+    
+    # Add text annotations for raw counts
+    for i in range(num_classes):
+        for j in range(num_classes):
+            text = ax.text(
+                j, i, f"{cm[i, j]}\n({cm_normalized[i, j]:.2f})",
+                ha="center", va="center", color="black", fontsize=8
+            )
+    
+    fig.tight_layout()
+    return fig
 
 # sample function for model architecture visualization
 # draw_graph function saves an additional file: Graphviz DOT graph file, it's not necessary to delete it
@@ -45,6 +222,46 @@ def plot_learning_curves(
     plt.savefig("learning_curves.png")
 
 
+def update_confusion_matrix(
+    cm: torch.Tensor | None,
+    preds_logits: torch.Tensor,
+    targets: torch.Tensor,
+    num_classes: int,
+    ignore_index: int | None = None,
+) -> torch.Tensor:
+    """Accumulate a confusion matrix for one batch entirely on-device.
+
+    Args:
+        cm: Running confusion matrix of shape (num_classes, num_classes), or None on the first call.
+        preds_logits: Raw logits of shape (B, C, H, W).
+        targets: Ground-truth class indices of shape (B, H, W), dtype long.
+        num_classes: Total number of classes C.
+        ignore_index: Class index to exclude from accumulation (e.g. void/background).
+
+    Returns:
+        Updated confusion matrix tensor (num_classes, num_classes) on the same device as inputs.
+    """
+    with torch.no_grad():
+        preds_flat = preds_logits.argmax(dim=1).view(-1)   # (B*H*W,)
+        targets_flat = targets.view(-1)                    # (B*H*W,)
+
+        if ignore_index is not None:
+            valid = targets_flat != ignore_index
+            preds_flat = preds_flat[valid]
+            targets_flat = targets_flat[valid]
+
+        # Linear index: row = true class, col = predicted class
+        linear_idx = targets_flat * num_classes + preds_flat
+        batch_cm = torch.bincount(
+            linear_idx, minlength=num_classes * num_classes
+        ).reshape(num_classes, num_classes)
+
+    if cm is None:
+        return batch_cm
+    cm += batch_cm
+    return cm
+
+
 # sample function for training
 def fit(
     net: nn.Module,
@@ -54,27 +271,169 @@ def fit(
     val_dataloader: DataLoader,
     loss: nn.Module,
     optimizer: Optimizer,
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler],
     device: torch.device,
+    metrics: list[Callable[[Tensor, Tensor], dict[str, float]]] | None = None,
+    checkpoint_path: Optional[Path] = None,
 ) -> tuple[list[float], list[float]]:
     train_losses: list[float] = []
     val_losses: list[float] = []
 
-    running_loss = 0.0
-    for epoch in range(epochs):
-        for batch_idx in range(0, 10):
-            # add current loss
-            running_loss += 0.1
+    best_val_loss = float("inf")
 
-            # graph variables
-            train_losses.append(running_loss)
-            val_losses.append(running_loss - 0.1)
+    net = net.to(device)
+    loss = loss.to(device)
+
+    def run_epoch(dataloader: DataLoader, is_train: bool) -> tuple[float, dict[str, list[MetricResult]], np.ndarray | None, dict[str, float]]:
+        running_loss = 0.0
+        batches = 0
+        metrics_results: dict[str, list[MetricResult]] = {}
+        for metric_fn in metrics or []:
+            metrics_results[metric_fn.__name__] = []
+        
+        # Initialize confusion matrix for validation (will be properly sized after first batch)
+        accumulated_cm = None
+
+        # Timing accumulators (only used for validation)
+        total_move_time = 0.0
+        total_forward_time = 0.0
+        total_loss_time = 0.0
+        total_cm_time = 0.0
+        total_other_time = 0.0
+
+        with torch.set_grad_enabled(is_train):
+            for images, targets in tqdm(dataloader, desc="{} Batches".format("Training" if is_train else "Validation")):
+                batch_start = time.perf_counter()
+
+                # Measure device transfer time
+                t0 = time.perf_counter()
+                images = images.to(device)
+                targets = targets.to(device)
+                t1 = time.perf_counter()
+
+                # Forward pass
+                t2 = time.perf_counter()
+                preds_out = net(images)
+                t3 = time.perf_counter()
+
+                # Loss computation (and auxiliary loss if present)
+                t4 = time.perf_counter()
+                if isinstance(preds_out, dict):
+                    total_loss = loss(preds_out["out"], targets)
+                    if "aux" in preds_out and preds_out["aux"] is not None:
+                        total_loss = total_loss + 0.4 * loss(preds_out["aux"], targets)
+                else:
+                    total_loss = loss(preds_out, targets)
+                t5 = time.perf_counter()
+
+                if is_train:
+                    optimizer.zero_grad()
+                    total_loss.backward()
+                    optimizer.step()
+
+                running_loss += total_loss.item()
+                batches += 1
+
+                # For validation, accumulate confusion matrix
+                if not is_train:
+                    preds_for_cm = preds_out["out"] if isinstance(preds_out, dict) else preds_out
+                    num_classes = preds_for_cm.shape[1]
+
+                    t6 = time.perf_counter()
+                    accumulated_cm = update_confusion_matrix(accumulated_cm, preds_for_cm, targets, num_classes, ignore_index=CONFIG["class_ignore_index"])
+                    t7 = time.perf_counter()
+
+                    # accumulate timings
+                    total_move_time += (t1 - t0)
+                    total_forward_time += (t3 - t2)
+                    total_loss_time += (t5 - t4)
+                    total_cm_time += (t7 - t6)
+                    total_other_time += (time.perf_counter() - batch_start) - ((t1 - t0) + (t3 - t2) + (t5 - t4) + (t7 - t6))
+
+        avg_loss = running_loss / max(batches, 1)
+
+        # Prepare average timings per batch for validation
+        timings: dict[str, float] = {}
+        if not is_train and batches > 0:
+            timings = {
+                "avg_move_time": total_move_time / batches,
+                "avg_forward_time": total_forward_time / batches,
+                "avg_loss_time": total_loss_time / batches,
+                "avg_cm_time": total_cm_time / batches,
+                "avg_other_time": total_other_time / batches,
+                "total_batches": float(batches),
+            }
+        return avg_loss, metrics_results, accumulated_cm, timings
+
+    for epoch in tqdm(range(epochs), desc="Epochs"):
+        net.train()
+
+        avg_train_loss, _, _, _ = run_epoch(train_dataloader, is_train=True)
+        train_losses.append(avg_train_loss)
+
+        net.eval()
+        avg_val_loss, val_metrics_results, val_confusion_matrix, val_timings = run_epoch(val_dataloader, is_train=False)
+        val_losses.append(avg_val_loss)
+
+        if checkpoint_path is not None and avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            save_checkpoint(net, optimizer, epoch, {"train_loss": avg_train_loss, "val_loss": avg_val_loss, **val_metrics_results}, checkpoint_path)
 
         # print training info
         print(
             "Epoch {}, train loss: {:.5f}, val loss: {:.5f}".format(
-                epoch, running_loss / 42, running_loss / 42
+                epoch + 1, avg_train_loss, avg_val_loss
             )
         )
+
+        mlflow.log_metric("train_loss", avg_train_loss, step=epoch)
+        mlflow.log_metric("val_loss", avg_val_loss, step=epoch)
+
+        # Compute and log mIoU from accumulated confusion matrix
+        if val_confusion_matrix is not None:
+            mlou_result = compute_mlou_from_cm(val_confusion_matrix, ignore_index=CONFIG["class_ignore_index"])
+            print("Validation metrics:")
+            print(f"\tmIoU: {mlou_result.main:.4f}")
+            mlflow.log_metric("mIoU", mlou_result.main, step=epoch)
+            
+            if mlou_result.per_class is not None:
+                for cls, value in mlou_result.per_class.items():
+                    mlflow.log_metric(f"mIoU_class_{cls}", value, step=epoch)
+                    print(f"\t\tClass {cls}: {value:.4f}")
+            
+            # Plot and log confusion matrix
+            cm_fig = plot_confusion_matrix(val_confusion_matrix, num_classes=val_confusion_matrix.shape[0])
+            mlflow.log_figure(cm_fig, f"confusion_matrix_epoch_{epoch}.png")
+            plt.close(cm_fig)
+            
+            # Save confusion matrix as numpy
+            cm_npy_path = f"confusion_matrix_epoch_{epoch}.npy"
+            np.save(cm_npy_path, val_confusion_matrix)
+            mlflow.log_artifact(cm_npy_path)
+
+            # Log validation timing breakdown
+            if val_timings:
+                print("Validation timing (avg seconds per batch):")
+                for k, v in val_timings.items():
+                    if k == "total_batches":
+                        continue
+                    print(f"\t{k}: {v:.6f}s")
+                    mlflow.log_metric(f"val_timing_{k}", float(v), step=epoch)
+
+        # print other metrics info (if any additional metrics are added)
+        if metrics is not None and val_metrics_results:
+            for metric_name, batch_results in val_metrics_results.items():
+                agg = aggregate_metric_results(batch_results)
+                print(f"\t{metric_name}: {agg.main:.4f}")
+                mlflow.log_metric(metric_name, agg.main, step=epoch)
+                if agg.per_class is not None:
+                    for cls, value in agg.per_class.items():
+                        mlflow.log_metric(f"{metric_name}_class_{cls}", value, step=epoch)
+                        print(f"\t\tClass {cls}: {value:.4f}")
+
+        if scheduler is not None:
+            scheduler.step()
+
 
     print("Training finished!")
     return train_losses, val_losses
@@ -93,27 +452,106 @@ def training(dataset_path: Path) -> None:
         - model_architecture.png (a scheme of model's architecture)
     """
     # Check for available GPU
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Computing with {}!".format(device))
 
-    batch_size = 64
-    train_dataset, val_dataset = SampleDataset(), SampleDataset()
-    train_dataloader, val_dataloader = None, None
+    # initialize MLflow tracking
+    mlflow.set_tracking_uri("http://localhost:5000")
+    mlflow.set_experiment("segmentation_experiment")
 
-    net = ModelExample()
-    input_sample = torch.zeros((1, 512, 1024))
+    df = create_dataframe(dataset_path)
+
+    train_df, val_df, _ = split_dataframe(df)
+
+    if CONFIG["test_mode"]:
+        train_df = train_df.head(10)
+        val_df = train_df
+
+    # transforms
+    train_transforms_list = []
+
+    if not CONFIG["test_mode"]:
+        if CONFIG["transforms_random_crop_size"]:
+            train_transforms_list.append(
+                MixedCropTransform(
+                    width=CONFIG["transforms_random_crop_size"],
+                    height=CONFIG["transforms_random_crop_size"],
+                    rare_classes=CONFIG["rare_classes"],
+                    rare_prob=CONFIG["transforms_rare_crop_prob"],
+                    debug_dir=CONFIG["debug_dir_rare_crops"]
+                )
+            )
+        else:
+            train_transforms_list.append(
+                A.RandomCrop(width=CONFIG["transforms_random_crop_size"], height=CONFIG["transforms_random_crop_size"])
+            )
+
+        train_transforms_list.extend([
+            A.ShiftScaleRotate(
+                shift_limit=0.05,
+                scale_limit=0.10,
+                rotate_limit=5,
+                border_mode=cv2.BORDER_CONSTANT,
+                value=0,
+                mask_value=CONFIG["class_ignore_index"],
+                p=0.5,
+            ),
+            A.HorizontalFlip(p=0.5),
+            A.RandomBrightnessContrast(p=0.2),
+
+            # Alternative to ColorJitter
+            # A.ColorJitter(
+            #     brightness=0.2,
+            #     contrast=0.2,
+            #     saturation=0.2,
+            #     hue=0.05,
+            #     p=0.3,
+            # ),
+        ])
+
+    train_transforms_list.append(
+        A.Normalize(mean=(0.485, 0.456, 0.406),
+            std=(0.229, 0.224, 0.225)),
+    )
+    
+
+    train_transforms = A.Compose(train_transforms_list)
+    val_transforms = A.Compose([A.Normalize(mean=(0.485, 0.456, 0.406),
+            std=(0.229, 0.224, 0.225))])
+
+    # dataset and dataloader
+    train_dataset = SegDataset(train_df, transforms=train_transforms)
+    val_dataset = SegDataset(val_df, transforms=val_transforms)
+
+    train_dataloader = DataLoader(train_dataset, batch_size=CONFIG["batch_size"], shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=CONFIG["batch_size"], shuffle=False)
+
+    net = ModelLRASPP()
+
+    # Draw the model architecture
+    input_sample = torch.zeros((1, 3, 512, 1024))
     draw_network_architecture(net, input_sample)
 
-    # define optimizer and learning rate
-    optimizer = None
+    class_weights = compute_class_weights(train_dataset, num_classes=len(train_dataset.color_to_class))
 
-    # define loss function
-    loss = None
+    # optimizer and learning rate
+    optimizer = torch.optim.AdamW(net.parameters(), lr=CONFIG["learning_rate"], weight_decay=CONFIG["optimizer_weight_decay"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
 
-    # train the network
-    train_losses, val_losses = fit(
-        net, batch_size, 3, train_dataloader, val_dataloader, loss, optimizer, device
-    )
+    # loss function
+    loss = HybridSegmentationLoss(class_weights=class_weights, ignore_index=CONFIG["class_ignore_index"])
+
+    # metrics
+    # Note: mIoU is now computed from accumulated confusion matrix during validation
+    metrics: list[Any] = []
+
+    # checkpoint path
+    checkpoint_path = Path(f"{CONFIG['model_checkpoint_path']}/{datetime.datetime.now().strftime('%m%d_%H%M%S')}") if CONFIG["model_checkpoint_path"] else None
+
+    with mlflow.start_run():
+        # train the network
+        train_losses, val_losses = fit(
+            net, CONFIG["batch_size"], CONFIG["epochs"], train_dataloader, val_dataloader, loss, optimizer, scheduler, device, metrics, checkpoint_path=checkpoint_path
+        )
 
     # save the trained model and plot the losses, feel free to create your own functions
     torch.save(net.state_dict(), "model.pt")

@@ -3,16 +3,21 @@
 # Description:
 # This file should contain network class. The class should subclass the torch.nn.Module class.
 
-import torch.nn.functional as F
 from torch import Tensor, nn
+from torchvision.models.segmentation import lraspp_mobilenet_v3_large
+
+from label_dict import label_dict
 
 
-class ModelExample(nn.Module):
-    def __init__(self) -> None:
+class ModelLRASPP(nn.Module):
+    def __init__(self, num_classes: int = len(label_dict)) -> None:
         super().__init__()
-        self.conv1 = nn.Conv2d(1, 20, 5)
-        self.conv2 = nn.Conv2d(20, 20, 5)
+        self.model = lraspp_mobilenet_v3_large(
+            weights=None,
+            weights_backbone = MobileNet_V3_Large_Weights.IMAGENET1K_V1,
+            # weights_backbone = None,
+            num_classes=num_classes,
+        )
 
-    def forward(self, x: Tensor) -> Tensor:
-        x = F.relu(self.conv1(x))
-        return F.relu(self.conv2(x))
+    def forward(self, x: Tensor) -> dict[str, Tensor]:
+        return self.model(x)

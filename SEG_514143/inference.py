@@ -9,8 +9,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from network import ModelExample
+from network import ModelLRASPP
 from PIL import Image
+
+from utils import device
 
 
 # declaration for this function should not be changed
@@ -28,11 +30,10 @@ def inference(dataset_path: Path, model_path: Path) -> None:
             structure with the same name as the input file.
     """
     # Check for available GPU
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Computing with {}!".format(device))
 
     # loading the model
-    model = ModelExample()
+    model = ModelLRASPP()
     state_dict = torch.load(model_path)
     model.load_state_dict(state_dict)
     model.eval()

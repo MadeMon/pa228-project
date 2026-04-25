@@ -6,12 +6,18 @@ authors = [
     {name = "Matěj Kubík", email = "matej.kubik@mail.muni.cz"},
 ]
 dependencies = [
-    "graphviz>=0.20.3",
-    "matplotlib>=3.10.1",
-    "numpy>=2.2.3",
-    "pillow>=11.1.0",
-    "torch>=2.6.0",
-    "torchview>=0.2.6",
+    "graphviz",
+    "matplotlib",
+    "numpy",
+    "pillow",
+    "torch",
+    "torchview",
+    "pandas",
+    "albumentations",
+    "tqdm",
+    "torchvision",
+    "mlflow",
+    "types-tqdm>=4.67.3.20260408",
 ]
 requires-python = "==3.14.*"
 readme = "README.md"
@@ -20,3 +26,7 @@ license = {text = "MIT"}
 
 [tool.pdm]
 distribution = false
+
+[tool.pdm.scripts]
+train = "python training.py data_seg_public"
+mlflow = "mlflow server --host 127.0.0.1 --port 5000"

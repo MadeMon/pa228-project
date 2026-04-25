@@ -223,3 +223,9 @@ __marimo__/
 
 # Other course materials
 tutorials/*
+SEG_514143/debug_rare_crops/*
+SEG_514143/mlartifacts/*
+SEG_514143/models/*
+SEG_514143/scripts/*
+*.npy
+.DS_Store
