@@ -10,20 +10,25 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pillow",
-    "torch",
+    "torch==2.10.*",
     "torchview",
     "pandas",
     "albumentations",
     "tqdm",
-    "torchvision",
+    "torchvision==0.25.*",
     "mlflow",
     "types-tqdm>=4.67.3.20260408",
     "databricks-sdk>=0.105.0",
     "python-dotenv>=1.2.2",
 ]
-requires-python = "==3.14.*"
+requires-python = "==3.12.*"
 readme = "README.md"
 license = {text = "MIT"}
+
+[[tool.pdm.source]]
+name = "cu128"
+url = "https://download.pytorch.org/whl/cu128"
+include_packages = ["torchvision", "torch", "torchaudio"]
 
 
 [tool.pdm]
@@ -31,4 +36,5 @@ distribution = false
 
 [tool.pdm.scripts]
 train = "python training.py data_seg_public"
+train-ssh = "python training.py /data/xkubik2/pa228_project_dataset/data_seg_public"
 mlflow = "mlflow server --host 127.0.0.1 --port 5000"
