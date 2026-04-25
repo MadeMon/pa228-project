@@ -222,6 +222,7 @@ def plot_learning_curves(
     plt.savefig("learning_curves.png")
 
 
+@torch.no_grad()
 def update_confusion_matrix(
     cm: torch.Tensor | None,
     preds_logits: torch.Tensor,
@@ -229,36 +230,38 @@ def update_confusion_matrix(
     num_classes: int,
     ignore_index: int | None = None,
 ) -> torch.Tensor:
-    """Accumulate a confusion matrix for one batch entirely on-device.
+    # argmax is fast on both CUDA and MPS — keep it on-device.
+    preds = preds_logits.argmax(dim=1).reshape(-1)
+    targets_flat = targets.reshape(-1)
 
-    Args:
-        cm: Running confusion matrix of shape (num_classes, num_classes), or None on the first call.
-        preds_logits: Raw logits of shape (B, C, H, W).
-        targets: Ground-truth class indices of shape (B, H, W), dtype long.
-        num_classes: Total number of classes C.
-        ignore_index: Class index to exclude from accumulation (e.g. void/background).
+    if preds_logits.device.type != "cuda":
+        # torch.bincount is poorly supported on MPS; move the small class-index
+        # tensors (not the full logit tensor) to CPU where bincount is native.
+        preds = preds.cpu()
+        targets_flat = targets_flat.cpu()
 
-    Returns:
-        Updated confusion matrix tensor (num_classes, num_classes) on the same device as inputs.
-    """
-    with torch.no_grad():
-        preds_flat = preds_logits.argmax(dim=1).view(-1)   # (B*H*W,)
-        targets_flat = targets.view(-1)                    # (B*H*W,)
+    preds = preds.to(torch.int64)
+    targets_flat = targets_flat.to(torch.int64)
 
-        if ignore_index is not None:
-            valid = targets_flat != ignore_index
-            preds_flat = preds_flat[valid]
-            targets_flat = targets_flat[valid]
-
-        # Linear index: row = true class, col = predicted class
-        linear_idx = targets_flat * num_classes + preds_flat
+    if ignore_index is not None:
+        valid = targets_flat != ignore_index
+        linear_idx = targets_flat * num_classes + preds
+        # Route ignored pixels to an extra overflow bin so bincount stays branchless.
+        ignore_bin = num_classes * num_classes
+        linear_idx[~valid] = ignore_bin
+        counts = torch.bincount(linear_idx, minlength=ignore_bin + 1)
+        batch_cm = counts[:ignore_bin].reshape(num_classes, num_classes)
+    else:
+        linear_idx = targets_flat * num_classes + preds
         batch_cm = torch.bincount(
-            linear_idx, minlength=num_classes * num_classes
+            linear_idx,
+            minlength=num_classes * num_classes,
         ).reshape(num_classes, num_classes)
 
     if cm is None:
         return batch_cm
-    cm += batch_cm
+
+    cm.add_(batch_cm)
     return cm
 
 
