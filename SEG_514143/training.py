@@ -385,6 +385,9 @@ def fit(
                 images = images.to(device, non_blocking=use_non_blocking_transfer)
                 targets = targets.to(device, non_blocking=use_non_blocking_transfer)
                 t1 = time.perf_counter()
+                # Keep masks compact in host/pinned memory (uint8) and cast to long on-device.
+                # Perform the cast after timing the transfer so transfer timing excludes the cast.
+                targets_long = targets.long()
 
                 # Forward pass
                 t2 = time.perf_counter()
@@ -396,13 +399,13 @@ def fit(
                 t4 = time.perf_counter()
                 with autocast_context():
                     if isinstance(preds_out, dict):
-                        total_loss = loss(preds_out["out"], targets)
+                        total_loss = loss(preds_out["out"], targets_long)
                         if "aux" in preds_out and preds_out["aux"] is not None:
                             total_loss = total_loss + 0.4 * loss(
-                                preds_out["aux"], targets
+                                preds_out["aux"], targets_long
                             )
                     else:
-                        total_loss = loss(preds_out, targets)
+                        total_loss = loss(preds_out, targets_long)
                 t5 = time.perf_counter()
 
                 if is_train:
@@ -423,7 +426,8 @@ def fit(
                     num_classes = preds_for_cm.shape[1]
 
                     t6 = time.perf_counter()
-                    accumulated_cm = update_confusion_matrix(accumulated_cm, preds_for_cm, targets, num_classes, ignore_index=CONFIG["class_ignore_index"])
+                    # Use the on-device long targets for confusion matrix accumulation.
+                    accumulated_cm = update_confusion_matrix(accumulated_cm, preds_for_cm, targets_long, num_classes, ignore_index=CONFIG["class_ignore_index"])
                     t7 = time.perf_counter()
 
                     # accumulate timings

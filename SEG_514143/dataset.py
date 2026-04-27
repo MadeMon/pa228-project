@@ -31,7 +31,9 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
         return len(self.df)
 
     def _rgb_mask_to_class(self, mask_rgb: np.ndarray, mask_path: Path) -> np.ndarray:
-        class_mask = np.full(mask_rgb.shape[:2], -1, dtype=np.int64)
+        # Use a compact dtype during conversion then cast to uint8 for storage.
+        # Start with signed int8 to allow the -1 sentinel for unknown pixels.
+        class_mask = np.full(mask_rgb.shape[:2], -1, dtype=np.int8)
 
         for color, class_idx in self.color_to_class.items():
             color_match = np.all(mask_rgb == np.array(color, dtype=np.uint8), axis=-1)
@@ -44,7 +46,8 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
                 f"Unknown mask colors in {mask_path}: {unknown_colors.tolist()}"
             )
 
-        return class_mask
+        # No unknown pixels remain; cast to uint8 to store masks compactly (0..num_classes-1)
+        return class_mask.astype(np.uint8)
 
     def _load_single_sample(self, img_path: Path, mask_path: Path) -> dict[str, Any]:
         image = np.array(Image.open(img_path).convert("RGB"), dtype=np.uint8)
@@ -100,5 +103,7 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
             mask = transformed["mask"]
 
         image_tensor = torch.from_numpy(np.transpose(image, (2, 0, 1))).float()
-        mask_tensor = torch.from_numpy(mask.astype(np.int64)).long()
+        # Keep masks compact on CPU/pinned memory as uint8 (1 byte per pixel).
+        # Cast to `long` only on-device during training to satisfy loss/metrics.
+        mask_tensor = torch.from_numpy(mask.astype(np.uint8))
         return image_tensor, mask_tensor
