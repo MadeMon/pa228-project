@@ -1,7 +1,13 @@
+import os
 from pathlib import Path
 
+from matplotlib import pyplot as plt
+import mlflow
+import numpy as np
 from pandas import DataFrame
 import torch
+
+from metrics import plot_confusion_matrix
 
 IMG_DIR = "img"
 MASK_DIR = "mask"
@@ -93,21 +99,49 @@ def create_dataframe_tiny_set(dataset_path, num_samples: int = 10) -> DataFrame:
             break
     return DataFrame(samples)
 
-def save_checkpoint(model, optimizer, epoch, metrics, path: Path):
+def compose_checkpoint_path(checkpoint_dir: Path, model, optimizer, crop_size) -> Path:
+    """Compose a checkpoint path based on the model, optimizer, and crop size."""
+    path = checkpoint_dir / f"{model.__class__.__name__}_opt_{optimizer.__class__.__name__}_crop_{crop_size}_best"
+    return path.with_suffix(".pt")
+
+def save_checkpoint(model, optimizer, epoch, metrics, checkpoint_dir: Path, crop_size):
     """Save model checkpoint."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    path = compose_checkpoint_path(checkpoint_dir, model, optimizer, crop_size)
     torch.save({
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "metrics": metrics,
+        "model_class": model.__class__.__name__,
     }, path)
 
 
-def load_checkpoint(path: Path, model, optimizer=None):
+def load_checkpoint(checkpoint_dir: Path, model, optimizer, crop_size):
     """Load model checkpoint."""
+    path = compose_checkpoint_path(checkpoint_dir, model, optimizer, crop_size)
+
     checkpoint = torch.load(path, map_location=device, weights_only=False)
+
     model.load_state_dict(checkpoint["model_state_dict"])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     return checkpoint
+
+    
+def plot_and_save_confusion_matrix(cm: torch.Tensor, class_names: list[str], epoch: int) -> None:
+    """Plot and save confusion matrix."""
+    # Plot and log confusion matrix
+    cm_fig = plot_confusion_matrix(cm, num_classes=len(class_names), class_names=class_names)
+    mlflow.log_figure(cm_fig, f"confusion_matrix_epoch_{epoch}.png")
+    plt.close(cm_fig)
+
+    # Save confusion matrix as numpy
+    cm_npy_path = f"confusion_matrix_epoch_{epoch}.npy"
+    if isinstance(cm, torch.Tensor):
+        cm_to_save = cm.detach().cpu().numpy()
+    else:
+        cm_to_save = cm
+    np.save(cm_npy_path, cm_to_save)
+    mlflow.log_artifact(cm_npy_path)
+    os.remove(cm_npy_path)

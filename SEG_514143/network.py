@@ -4,8 +4,8 @@
 # This file should contain network class. The class should subclass the torch.nn.Module class.
 
 from torch import Tensor, nn
+from torchvision.models import MobileNet_V3_Large_Weights, mobilenet_v3_large
 from torchvision.models.segmentation import lraspp_mobilenet_v3_large
-from torchvision.models import MobileNet_V3_Large_Weights
 
 from label_dict import label_dict
 
@@ -15,7 +15,7 @@ class ModelLRASPP(nn.Module):
         super().__init__()
         self.model = lraspp_mobilenet_v3_large(
             weights=None,
-            weights_backbone = MobileNet_V3_Large_Weights.IMAGENET1K_V1,
+            weights_backbone=MobileNet_V3_Large_Weights.IMAGENET1K_V1,
             # weights_backbone = None,
             num_classes=num_classes,
         )

@@ -5,10 +5,9 @@
 # Usage: python training.py <dataset_path>
 
 from argparse import ArgumentParser
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
-import datetime
 from pathlib import Path
 import random
 from typing import Any, Optional, Tuple, cast
@@ -19,10 +18,11 @@ import numpy as np
 import torch
 from tqdm import tqdm
 import time
+from metrics import MetricResult, aggregate_metric_results, compute_miou_from_cm, plot_confusion_matrix, update_confusion_matrix
 from losses import HybridSegmentationLoss, compute_class_weights
 from rare_crops import MixedCropTransform
 from dataset import SegDataset
-from network import ModelLRASPP
+from network import ModelCustom, ModelLRASPP
 from torch import Tensor, nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
@@ -51,16 +51,14 @@ torch.manual_seed(42)
 np.random.seed(42)
 random.seed(42)
 
-import multiprocessing
-
 TRAINING_SCHEDULER: Any | None = None
 
 CONFIG: dict[str, Any] = {
-    "batch_size": 32,
+    "batch_size": 64,
     "epochs": 500,
     "learning_rate": 1e-3,
     "optimizer_weight_decay": 1e-4,
-    "transforms_random_crop_size": 256,  # 512, 256, None
+    "transforms_random_crop_size": 512,  # 512, 256, None
     "transforms_rare_crop_prob": 0.5,
     "rare_classes": [
         3,  # object
@@ -74,14 +72,14 @@ CONFIG: dict[str, Any] = {
     "cuda_use_grad_scaler": True,
     "cuda_pin_memory": True,
     "cuda_non_blocking_transfer": True,
-    "cuda_num_workers": multiprocessing.cpu_count() - 1,  # Use all but one CPU core for data loading when using CUDA
+    "cuda_num_workers": 0, # dataset is fully loaded into memory
     "other_num_workers": 0,
     "cuda_prefetch_factor": 2,
     "cuda_persistent_workers": True,
     "cuda_cudnn_benchmark": True,
     "cuda_compile_model": False,
-    "log_runtime_metadata": True,
-    "preload_samples": device.type == "mps",  # Preload samples into memory for faster access on MPS, where disk I/O is slow. 
+    "preload_samples": True,
+    "network": ModelLRASPP(), #ModelCustom(), ModelLRASPP() 
 }
 
 
@@ -97,6 +95,7 @@ def create_data_loaders(
         "batch_size": batch_size,
         "shuffle": True,
         "num_workers": num_workers,
+        "drop_last": True,
     }
     val_loader_kwargs: dict[str, Any] = {
         "batch_size": batch_size,
@@ -120,25 +119,6 @@ def create_data_loaders(
     val_dataloader = DataLoader(val_dataset, **val_loader_kwargs)
     return train_dataloader, val_dataloader, train_loader_kwargs, val_loader_kwargs
 
-
-@dataclass
-class MetricResult:
-    main: float
-    per_class: dict[int, float] | None = None
-
-
-def aggregate_metric_results(results: list["MetricResult"]) -> "MetricResult":
-    main = float(np.mean([r.main for r in results]))
-    if results and results[0].per_class is not None:
-        all_classes = results[0].per_class.keys()
-        per_class = {
-            cls: float(np.mean([r.per_class[cls] for r in results if cls in r.per_class]))
-            for cls in all_classes
-        }
-    else:
-        per_class = None
-    return MetricResult(main=main, per_class=per_class)
-
 def split_dataframe(df, train_ratio: float = 0.7, val_ratio: float = 0.2):
     total_samples = len(df)
     train_size = int(total_samples * train_ratio)
@@ -154,98 +134,6 @@ def split_dataframe(df, train_ratio: float = 0.7, val_ratio: float = 0.2):
     test_df = df.iloc[test_idx].reset_index(drop=True)
     return train_df, val_df, test_df
 
-def compute_miou_from_cm(
-    confusion_matrix: Tensor | np.ndarray, ignore_index: int | None = None
-) -> MetricResult:
-    """Compute mean IoU from accumulated confusion matrix.
-    
-    Args:
-        confusion_matrix: Accumulated confusion matrix of shape (num_classes, num_classes)
-        ignore_index: Class index to ignore when computing mean
-    
-    Returns:
-        MetricResult with mean IoU and per-class IoU dict
-    """
-    if isinstance(confusion_matrix, torch.Tensor):
-        cm = confusion_matrix.detach().cpu().numpy()
-    else:
-        cm = confusion_matrix
-
-    num_classes = cm.shape[0]
-    ious: dict[int, float] = {}
-    
-    for cls in range(num_classes):
-        if ignore_index is not None and cls == ignore_index:
-            continue
-        
-        # TP: diagonal element, FP: sum of column minus TP, FN: sum of row minus TP
-        tp = cm[cls, cls]
-        fp = cm[:, cls].sum() - tp
-        fn = cm[cls, :].sum() - tp
-        
-        denominator = tp + fp + fn
-        if denominator > 0:
-            ious[cls] = float(tp / denominator)
-        else:
-            ious[cls] = 0.0
-    
-    mean_iou = float(np.mean(list(ious.values()))) if ious else 0.0
-    return MetricResult(main=mean_iou, per_class=ious)
-
-
-def plot_confusion_matrix(
-    confusion_matrix: Tensor | np.ndarray, num_classes: int, class_names: list[str] | None = None
-) -> plt.Figure:
-    """Plot confusion matrix as a heatmap.
-    
-    Args:
-        confusion_matrix: Confusion matrix of shape (num_classes, num_classes)
-        num_classes: Number of classes
-        class_names: Optional list of class names for labels
-    
-    Returns:
-        Matplotlib figure object
-    """
-    if isinstance(confusion_matrix, torch.Tensor):
-        cm = confusion_matrix.detach().cpu().numpy()
-    else:
-        cm = confusion_matrix
-
-    # Normalize CM by row (per true class) for better visualization
-    cm_normalized = cm.astype(float)
-    row_sums = cm_normalized.sum(axis=1, keepdims=True)
-    row_sums[row_sums == 0] = 1  # Avoid division by zero
-    cm_normalized = cm_normalized / row_sums
-    
-    fig, ax = plt.subplots(figsize=(12, 10))
-    im = ax.imshow(cm_normalized, cmap="Blues", aspect="auto")
-    
-    # Set ticks and labels
-    ticks = np.arange(num_classes)
-    ax.set_xticks(ticks)
-    ax.set_yticks(ticks)
-    
-    if class_names is not None:
-        ax.set_xticklabels(class_names, rotation=45, ha="right")
-        ax.set_yticklabels(class_names)
-    
-    ax.set_xlabel("Predicted Class")
-    ax.set_ylabel("True Class")
-    ax.set_title("Confusion Matrix (Normalized by True Class)")
-    
-    # Add colorbar
-    plt.colorbar(im, ax=ax)
-    
-    # Add text annotations for raw counts
-    for i in range(num_classes):
-        for j in range(num_classes):
-            text = ax.text(
-                j, i, f"{cm[i, j]}\n({cm_normalized[i, j]:.2f})",
-                ha="center", va="center", color="black", fontsize=8
-            )
-    
-    fig.tight_layout()
-    return fig
 
 # sample function for model architecture visualization
 # draw_graph function saves an additional file: Graphviz DOT graph file, it's not necessary to delete it
@@ -274,50 +162,6 @@ def plot_learning_curves(
     plt.legend()
     plt.savefig("learning_curves.png")
 
-
-@torch.no_grad()
-def update_confusion_matrix(
-    cm: torch.Tensor | None,
-    preds_logits: torch.Tensor,
-    targets: torch.Tensor,
-    num_classes: int,
-    ignore_index: int | None = None,
-) -> torch.Tensor:
-    # argmax is fast on both CUDA and MPS — keep it on-device.
-    preds = preds_logits.argmax(dim=1).reshape(-1)
-    targets_flat = targets.reshape(-1)
-
-    if preds_logits.device.type != "cuda":
-        # torch.bincount is poorly supported on MPS; move the small class-index
-        # tensors (not the full logit tensor) to CPU where bincount is native.
-        preds = preds.cpu()
-        targets_flat = targets_flat.cpu()
-
-    preds = preds.to(torch.int64)
-    targets_flat = targets_flat.to(torch.int64)
-
-    if ignore_index is not None:
-        valid = targets_flat != ignore_index
-        linear_idx = targets_flat * num_classes + preds
-        # Route ignored pixels to an extra overflow bin so bincount stays branchless.
-        ignore_bin = num_classes * num_classes
-        linear_idx[~valid] = ignore_bin
-        counts = torch.bincount(linear_idx, minlength=ignore_bin + 1)
-        batch_cm = counts[:ignore_bin].reshape(num_classes, num_classes)
-    else:
-        linear_idx = targets_flat * num_classes + preds
-        batch_cm = torch.bincount(
-            linear_idx,
-            minlength=num_classes * num_classes,
-        ).reshape(num_classes, num_classes)
-
-    if cm is None:
-        return batch_cm
-
-    cm.add_(batch_cm)
-    return cm
-
-
 # sample function for training
 def fit(
     net: nn.Module,
@@ -328,16 +172,19 @@ def fit(
     optimizer: Optimizer,
     scheduler: Optional[torch.optim.lr_scheduler.LRScheduler],
     device: torch.device,
-    metrics: list[Callable[[Tensor, Tensor], dict[str, float]]] | None = None,
-    checkpoint_path: Optional[Path] = None,
+    metrics: list[Tuple[str,Callable[[Tensor], MetricResult]]],
+    main_metric_name: str = "mIoU",
+    maximize_main_metric: bool = True,
+    checkpoint_dir: Optional[Path] = None,
     use_amp: bool = False,
     use_grad_scaler: bool = False,
     use_non_blocking_transfer: bool = False,
+    start_epoch: int = 0,
 ) -> tuple[list[float], list[float]]:
     train_losses: list[float] = []
     val_losses: list[float] = []
 
-    best_val_loss = float("inf")
+    best_main_metric = -float("inf") if maximize_main_metric else float("inf")
 
     net = net.to(device)
     loss = loss.to(device)
@@ -355,13 +202,10 @@ def fit(
     def run_epoch(
         dataloader: DataLoader, is_train: bool
     ) -> tuple[
-        float, dict[str, list[MetricResult]], torch.Tensor | None, dict[str, float]
+        float, torch.Tensor | None, dict[str, float]
     ]:
         running_loss = 0.0
         batches = 0
-        metrics_results: dict[str, list[MetricResult]] = {}
-        for metric_fn in metrics or []:
-            metrics_results[metric_fn.__name__] = []
 
         # Initialize confusion matrix for validation (will be properly sized after first batch)
         accumulated_cm = None
@@ -450,21 +294,20 @@ def fit(
                 "avg_other_time": total_other_time / batches,
                 "total_batches": float(batches),
             }
-        return avg_loss, metrics_results, accumulated_cm, timings
+        return avg_loss, accumulated_cm, timings
 
-    for epoch in tqdm(range(epochs), desc="Epochs"):
+    for epoch in tqdm(range(start_epoch, epochs), desc="Epochs"):
         net.train()
 
-        avg_train_loss, _, _, _ = run_epoch(train_dataloader, is_train=True)
+        avg_train_loss, _, _ = run_epoch(train_dataloader, is_train=True)
         train_losses.append(avg_train_loss)
 
         net.eval()
-        avg_val_loss, val_metrics_results, val_confusion_matrix, val_timings = run_epoch(val_dataloader, is_train=False)
+        avg_val_loss, val_confusion_matrix, val_timings = run_epoch(val_dataloader, is_train=False)
         val_losses.append(avg_val_loss)
 
-        if checkpoint_path is not None and avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            save_checkpoint(net, optimizer, epoch, {"train_loss": avg_train_loss, "val_loss": avg_val_loss, **val_metrics_results}, checkpoint_path)
+        if val_confusion_matrix is None:
+            raise RuntimeError("Validation confusion matrix was not computed.")
 
         # print training info
         print(
@@ -476,51 +319,29 @@ def fit(
         mlflow.log_metric("train_loss", avg_train_loss, step=epoch)
         mlflow.log_metric("val_loss", avg_val_loss, step=epoch)
 
-        # Compute and log mIoU from accumulated confusion matrix
-        if val_confusion_matrix is not None:
-            miou_result = compute_miou_from_cm(val_confusion_matrix, ignore_index=CONFIG["class_ignore_index"])
-            print("Validation metrics:")
-            print(f"\tmIoU: {miou_result.main:.4f}")
-            mlflow.log_metric("mIoU", miou_result.main, step=epoch)
+        val_metrics_results: dict[str, MetricResult] = {}
 
-            if miou_result.per_class is not None:
-                for cls, value in miou_result.per_class.items():
-                    mlflow.log_metric(f"mIoU_class_{cls}", value, step=epoch)
+        for metric_name, metric in metrics:
+            metric_result = metric(val_confusion_matrix)
+            val_metrics_results[metric_name] = metric_result
+            print(f"\t{metric_name}: {metric_result.main:.4f}")
+            mlflow.log_metric(metric_name, metric_result.main, step=epoch)
+            if metric_result.per_class is not None:
+                for cls, value in metric_result.per_class.items():
+                    mlflow.log_metric(f"{metric_name}_class_{cls}", value, step=epoch)
                     print(f"\t\tClass {cls}: {value:.4f}")
 
-            # Plot and log confusion matrix
-            cm_fig = plot_confusion_matrix(val_confusion_matrix, num_classes=val_confusion_matrix.shape[0])
-            mlflow.log_figure(cm_fig, f"confusion_matrix_epoch_{epoch}.png")
-            plt.close(cm_fig)
+        # Log validation timing breakdown
+        if val_timings:
+            print("Validation timing (avg seconds per batch):")
+            for k, v in val_timings.items():
+                if k == "total_batches":
+                    continue
+                print(f"\t{k}: {v:.6f}s")
 
-            # Save confusion matrix as numpy
-            cm_npy_path = f"confusion_matrix_epoch_{epoch}.npy"
-            if isinstance(val_confusion_matrix, torch.Tensor):
-                cm_to_save = val_confusion_matrix.detach().cpu().numpy()
-            else:
-                cm_to_save = val_confusion_matrix
-            np.save(cm_npy_path, cm_to_save)
-            mlflow.log_artifact(cm_npy_path)
-
-            # Log validation timing breakdown
-            if val_timings:
-                print("Validation timing (avg seconds per batch):")
-                for k, v in val_timings.items():
-                    if k == "total_batches":
-                        continue
-                    print(f"\t{k}: {v:.6f}s")
-                    mlflow.log_metric(f"val_timing_{k}", float(v), step=epoch)
-
-        # print other metrics info (if any additional metrics are added)
-        if metrics is not None and val_metrics_results:
-            for metric_name, batch_results in val_metrics_results.items():
-                agg = aggregate_metric_results(batch_results)
-                print(f"\t{metric_name}: {agg.main:.4f}")
-                mlflow.log_metric(metric_name, agg.main, step=epoch)
-                if agg.per_class is not None:
-                    for cls, value in agg.per_class.items():
-                        mlflow.log_metric(f"{metric_name}_class_{cls}", value, step=epoch)
-                        print(f"\t\tClass {cls}: {value:.4f}")
+        # Save checkpoint every epoch
+        if checkpoint_dir is not None and ((maximize_main_metric and val_metrics_results[main_metric_name].main > best_main_metric) or (not maximize_main_metric and val_metrics_results[main_metric_name].main < best_main_metric)):
+            save_checkpoint(net, optimizer, epoch, {"train_loss": avg_train_loss, "val_loss": avg_val_loss, **val_metrics_results}, checkpoint_dir, crop_size = CONFIG["transforms_random_crop_size"])
 
         if scheduler is not None:
             scheduler.step()
@@ -625,7 +446,7 @@ def training(dataset_path: Path) -> None:
         )
     )
 
-    net = ModelLRASPP()
+    net = CONFIG["network"]
 
     # Draw the model architecture
     input_sample = torch.zeros((1, 3, 512, 1024))
@@ -660,11 +481,21 @@ def training(dataset_path: Path) -> None:
     loss = HybridSegmentationLoss(class_weights=class_weights, ignore_index=CONFIG["class_ignore_index"])
 
     # metrics
-    # Note: mIoU is now computed from accumulated confusion matrix during validation
-    metrics: list[Any] = []
+    metrics: list[Any] = [("mIoU", lambda cm: compute_miou_from_cm(cm, ignore_index=CONFIG["class_ignore_index"]))]
 
-    # checkpoint path
-    checkpoint_path = Path(f"{CONFIG['model_checkpoint_path']}/{datetime.datetime.now().strftime('%m%d_%H%M%S')}") if CONFIG["model_checkpoint_path"] else None
+    # Try to resume from latest checkpoint
+    checkpoint_dir = Path(f"{CONFIG['model_checkpoint_path']}") if CONFIG["model_checkpoint_path"] else None
+    start_epoch = 0
+    if checkpoint_dir is not None:
+        checkpoint = None
+        try:
+            from utils import load_checkpoint
+            checkpoint = load_checkpoint(checkpoint_dir, net, optimizer, crop_size=CONFIG["transforms_random_crop_size"])
+        except Exception as e:
+            print(f"Failed to load checkpoint: {e}")
+        if checkpoint is not None:
+            start_epoch = checkpoint.get("epoch", start_epoch) + 1  # Resume from the next epoch
+            print(f"Resuming from epoch {start_epoch}")
 
     use_amp = bool(is_cuda and CONFIG["cuda_use_amp"])
     use_grad_scaler = bool(use_amp and CONFIG["cuda_use_grad_scaler"])
@@ -691,25 +522,25 @@ def training(dataset_path: Path) -> None:
         print(f"\t{key}: {value}")
 
     with mlflow.start_run():
-        if CONFIG["log_runtime_metadata"]:
-            for key, value in runtime_metadata.items():
-                mlflow.log_param(key, value)
+        mlflow.log_params(runtime_metadata)
 
         # train the network
         train_losses, val_losses = fit(
             train_net,
             CONFIG["epochs"],
-            train_dataloader,
-            val_dataloader,
-            loss,
-            optimizer,
-            scheduler,
-            device,
-            metrics,
-            checkpoint_path=checkpoint_path,
+            train_dataloader=train_dataloader,
+            val_dataloader=val_dataloader,
+            loss=loss,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=device,
+            metrics=metrics,
+            maximize_main_metric=True,
+            checkpoint_dir=checkpoint_dir,
             use_amp=use_amp,
             use_grad_scaler=use_grad_scaler,
             use_non_blocking_transfer=use_non_blocking_transfer,
+            start_epoch=start_epoch,
         )
 
     # save the trained model and plot the losses, feel free to create your own functions
