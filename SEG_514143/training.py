@@ -78,7 +78,7 @@ CONFIG: dict[str, Any] = {
     "debug_dir_rare_crops": None,  # "debug_rare_crops", None
     "class_ignore_index": 0,  # 0 is the "void" class
     "test_mode": False,  # use subset of 10 samples to test the training pipeline - try to overfit the model on this tiny dataset, if it doesn't work, there is likely a bug in the training pipeline
-    "model_checkpoint_path": "models",
+    "model_checkpoint_path": Path("models"),
     "other_num_workers": 0,
     "preload_samples": True,
     "network": ModelCustom(len(label_dict)),
@@ -91,7 +91,8 @@ def create_data_loaders(
     batch_size: int,
     num_workers: int,
     pin_memory: bool,
-    is_cuda: bool,
+    persistent_workers: bool,
+    prefetch_factor: int,
 ) -> Tuple[DataLoader, DataLoader]:
     train_loader_kwargs: dict[str, Any] = {
         "batch_size": batch_size,
@@ -110,12 +111,10 @@ def create_data_loaders(
         val_loader_kwargs["pin_memory"] = True
 
     if num_workers > 0:
-        persistent_workers = bool(is_cuda and CONFIG["runtime_persistent_workers"])
         train_loader_kwargs["persistent_workers"] = persistent_workers
         val_loader_kwargs["persistent_workers"] = persistent_workers
-        if is_cuda:
-            train_loader_kwargs["prefetch_factor"] = CONFIG["runtime_prefetch_factor"]
-            val_loader_kwargs["prefetch_factor"] = CONFIG["runtime_prefetch_factor"]
+        train_loader_kwargs["prefetch_factor"] = prefetch_factor
+        val_loader_kwargs["prefetch_factor"] = prefetch_factor
 
     train_dataloader = DataLoader(train_dataset, **train_loader_kwargs)
     val_dataloader = DataLoader(val_dataset, **val_loader_kwargs)
@@ -386,7 +385,8 @@ def training(dataset_path: Path) -> None:
             CONFIG["batch_size"],
             CONFIG["runtime_num_workers"],
             CONFIG["runtime_pin_memory"],
-            CONFIG["runtime_use_cuda"],
+            CONFIG["runtime_persistent_workers"],
+            CONFIG["runtime_prefetch_factor"],
         )
     )
 
