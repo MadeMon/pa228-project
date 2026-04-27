@@ -154,7 +154,7 @@ def split_dataframe(df, train_ratio: float = 0.7, val_ratio: float = 0.2):
     test_df = df.iloc[test_idx].reset_index(drop=True)
     return train_df, val_df, test_df
 
-def compute_mlou_from_cm(
+def compute_miou_from_cm(
     confusion_matrix: Tensor | np.ndarray, ignore_index: int | None = None
 ) -> MetricResult:
     """Compute mean IoU from accumulated confusion matrix.
@@ -478,13 +478,13 @@ def fit(
 
         # Compute and log mIoU from accumulated confusion matrix
         if val_confusion_matrix is not None:
-            mlou_result = compute_mlou_from_cm(val_confusion_matrix, ignore_index=CONFIG["class_ignore_index"])
+            miou_result = compute_miou_from_cm(val_confusion_matrix, ignore_index=CONFIG["class_ignore_index"])
             print("Validation metrics:")
-            print(f"\tmIoU: {mlou_result.main:.4f}")
-            mlflow.log_metric("mIoU", mlou_result.main, step=epoch)
+            print(f"\tmIoU: {miou_result.main:.4f}")
+            mlflow.log_metric("mIoU", miou_result.main, step=epoch)
 
-            if mlou_result.per_class is not None:
-                for cls, value in mlou_result.per_class.items():
+            if miou_result.per_class is not None:
+                for cls, value in miou_result.per_class.items():
                     mlflow.log_metric(f"mIoU_class_{cls}", value, step=epoch)
                     print(f"\t\tClass {cls}: {value:.4f}")
 
