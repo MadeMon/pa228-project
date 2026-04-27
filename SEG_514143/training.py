@@ -210,37 +210,19 @@ def fit(
         # Initialize confusion matrix for validation (will be properly sized after first batch)
         accumulated_cm = None
 
-        # Timing accumulators (only used for validation)
-        total_move_time = 0.0
-        total_forward_time = 0.0
-        total_loss_time = 0.0
-        total_cm_time = 0.0
-        total_other_time = 0.0
-
         with torch.set_grad_enabled(is_train):
             for images, targets in tqdm(dataloader, desc="{} Batches".format("Training" if is_train else "Validation")):
-                batch_start = time.perf_counter()
-
                 if is_train:
                     optimizer.zero_grad(set_to_none=True)
 
-                # Measure device transfer time
-                t0 = time.perf_counter()
                 images = images.to(device, non_blocking=use_non_blocking_transfer)
                 targets = targets.to(device, non_blocking=use_non_blocking_transfer)
-                t1 = time.perf_counter()
                 # Keep masks compact in host/pinned memory (uint8) and cast to long on-device.
-                # Perform the cast after timing the transfer so transfer timing excludes the cast.
                 targets_long = targets.long()
 
-                # Forward pass
-                t2 = time.perf_counter()
                 with autocast_context():
                     preds_out = net(images)
-                t3 = time.perf_counter()
 
-                # Loss computation (and auxiliary loss if present)
-                t4 = time.perf_counter()
                 with autocast_context():
                     if isinstance(preds_out, dict):
                         total_loss = loss(preds_out["out"], targets_long)
@@ -250,7 +232,6 @@ def fit(
                             )
                     else:
                         total_loss = loss(preds_out, targets_long)
-                t5 = time.perf_counter()
 
                 if is_train:
                     if scaler is not None:
@@ -268,32 +249,12 @@ def fit(
                 if not is_train:
                     preds_for_cm = preds_out["out"] if isinstance(preds_out, dict) else preds_out
                     num_classes = preds_for_cm.shape[1]
-
-                    t6 = time.perf_counter()
                     # Use the on-device long targets for confusion matrix accumulation.
                     accumulated_cm = update_confusion_matrix(accumulated_cm, preds_for_cm, targets_long, num_classes, ignore_index=CONFIG["class_ignore_index"])
-                    t7 = time.perf_counter()
-
-                    # accumulate timings
-                    total_move_time += (t1 - t0)
-                    total_forward_time += (t3 - t2)
-                    total_loss_time += (t5 - t4)
-                    total_cm_time += (t7 - t6)
-                    total_other_time += (time.perf_counter() - batch_start) - ((t1 - t0) + (t3 - t2) + (t5 - t4) + (t7 - t6))
 
         avg_loss = running_loss / max(batches, 1)
-
-        # Prepare average timings per batch for validation
+        # Return empty timings dict for compatibility
         timings: dict[str, float] = {}
-        if not is_train and batches > 0:
-            timings = {
-                "avg_move_time": total_move_time / batches,
-                "avg_forward_time": total_forward_time / batches,
-                "avg_loss_time": total_loss_time / batches,
-                "avg_cm_time": total_cm_time / batches,
-                "avg_other_time": total_other_time / batches,
-                "total_batches": float(batches),
-            }
         return avg_loss, accumulated_cm, timings
 
     for epoch in tqdm(range(start_epoch, epochs), desc="Epochs"):
@@ -330,14 +291,6 @@ def fit(
                 for cls, value in metric_result.per_class.items():
                     mlflow.log_metric(f"{metric_name}_class_{cls}", value, step=epoch)
                     print(f"\t\tClass {cls}: {value:.4f}")
-
-        # Log validation timing breakdown
-        if val_timings:
-            print("Validation timing (avg seconds per batch):")
-            for k, v in val_timings.items():
-                if k == "total_batches":
-                    continue
-                print(f"\t{k}: {v:.6f}s")
 
         # Save checkpoint every epoch
         if checkpoint_dir is not None and ((maximize_main_metric and val_metrics_results[main_metric_name].main > best_main_metric) or (not maximize_main_metric and val_metrics_results[main_metric_name].main < best_main_metric)):
