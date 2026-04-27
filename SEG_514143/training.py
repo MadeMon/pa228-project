@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm import tqdm
-import time
+from label_dict import label_dict
 from metrics import MetricResult, aggregate_metric_results, compute_miou_from_cm, plot_confusion_matrix, update_confusion_matrix
 from losses import HybridSegmentationLoss, compute_class_weights
 from rare_crops import MixedCropTransform
@@ -54,8 +54,19 @@ random.seed(42)
 TRAINING_SCHEDULER: Any | None = None
 
 CONFIG: dict[str, Any] = {
+    "runtime_device": device.type,
+    "runtime_amp": True,
+    "runtime_grad_scaler": True,
+    "runtime_num_workers": 0,
+    "runtime_pin_memory": True,
+    "runtime_persistent_workers": True,
+    "runtime_prefetch_factor": 2,
+    "runtime_cudnn_benchmark": True,
+    "runtime_non_blocking_transfer": True,
+    "runtime_compile_model": True,
+    "num_classes": len(label_dict),
     "batch_size": 64,
-    "epochs": 500,
+    "epochs": 30,
     "learning_rate": 1e-3,
     "optimizer_weight_decay": 1e-4,
     "transforms_random_crop_size": 512,  # 512, 256, None
@@ -68,18 +79,9 @@ CONFIG: dict[str, Any] = {
     "class_ignore_index": 0,  # 0 is the "void" class
     "test_mode": False,  # use subset of 10 samples to test the training pipeline - try to overfit the model on this tiny dataset, if it doesn't work, there is likely a bug in the training pipeline
     "model_checkpoint_path": "models",
-    "cuda_use_amp": True,
-    "cuda_use_grad_scaler": True,
-    "cuda_pin_memory": True,
-    "cuda_non_blocking_transfer": True,
-    "cuda_num_workers": 0, # dataset is fully loaded into memory
     "other_num_workers": 0,
-    "cuda_prefetch_factor": 2,
-    "cuda_persistent_workers": True,
-    "cuda_cudnn_benchmark": True,
-    "cuda_compile_model": False,
     "preload_samples": True,
-    "network": ModelLRASPP(), #ModelCustom(), ModelLRASPP() 
+    "network": ModelCustom(len(label_dict)),
 }
 
 
@@ -90,7 +92,7 @@ def create_data_loaders(
     num_workers: int,
     pin_memory: bool,
     is_cuda: bool,
-) -> Tuple[DataLoader, DataLoader, dict[str, Any], dict[str, Any]]:
+) -> Tuple[DataLoader, DataLoader]:
     train_loader_kwargs: dict[str, Any] = {
         "batch_size": batch_size,
         "shuffle": True,
@@ -108,16 +110,16 @@ def create_data_loaders(
         val_loader_kwargs["pin_memory"] = True
 
     if num_workers > 0:
-        persistent_workers = bool(is_cuda and CONFIG["cuda_persistent_workers"])
+        persistent_workers = bool(is_cuda and CONFIG["runtime_persistent_workers"])
         train_loader_kwargs["persistent_workers"] = persistent_workers
         val_loader_kwargs["persistent_workers"] = persistent_workers
         if is_cuda:
-            train_loader_kwargs["prefetch_factor"] = CONFIG["cuda_prefetch_factor"]
-            val_loader_kwargs["prefetch_factor"] = CONFIG["cuda_prefetch_factor"]
+            train_loader_kwargs["prefetch_factor"] = CONFIG["runtime_prefetch_factor"]
+            val_loader_kwargs["prefetch_factor"] = CONFIG["runtime_prefetch_factor"]
 
     train_dataloader = DataLoader(train_dataset, **train_loader_kwargs)
     val_dataloader = DataLoader(val_dataset, **val_loader_kwargs)
-    return train_dataloader, val_dataloader, train_loader_kwargs, val_loader_kwargs
+    return train_dataloader, val_dataloader
 
 def split_dataframe(df, train_ratio: float = 0.7, val_ratio: float = 0.2):
     total_samples = len(df)
@@ -162,6 +164,11 @@ def plot_learning_curves(
     plt.legend()
     plt.savefig("learning_curves.png")
 
+def autocast_context(use_amp) -> Any:
+    if use_amp:
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
+    return nullcontext()
+
 # sample function for training
 def fit(
     net: nn.Module,
@@ -188,16 +195,9 @@ def fit(
 
     net = net.to(device)
     loss = loss.to(device)
-    use_amp = bool(use_amp and device.type == "cuda")
-    use_grad_scaler = bool(use_grad_scaler and use_amp and device.type == "cuda")
     scaler: torch.amp.GradScaler | None = None
     if use_grad_scaler:
         scaler = torch.amp.GradScaler(device="cuda", enabled=True)
-
-    def autocast_context() -> Any:
-        if use_amp:
-            return torch.autocast(device_type="cuda", dtype=torch.float16)
-        return nullcontext()
 
     def run_epoch(
         dataloader: DataLoader, is_train: bool
@@ -206,8 +206,6 @@ def fit(
     ]:
         running_loss = 0.0
         batches = 0
-
-        # Initialize confusion matrix for validation (will be properly sized after first batch)
         accumulated_cm = None
 
         with torch.set_grad_enabled(is_train):
@@ -220,10 +218,10 @@ def fit(
                 # Keep masks compact in host/pinned memory (uint8) and cast to long on-device.
                 targets_long = targets.long()
 
-                with autocast_context():
+                with autocast_context(use_amp=use_amp):
                     preds_out = net(images)
 
-                with autocast_context():
+                with autocast_context(use_amp=use_amp):
                     if isinstance(preds_out, dict):
                         total_loss = loss(preds_out["out"], targets_long)
                         if "aux" in preds_out and preds_out["aux"] is not None:
@@ -253,18 +251,16 @@ def fit(
                     accumulated_cm = update_confusion_matrix(accumulated_cm, preds_for_cm, targets_long, num_classes, ignore_index=CONFIG["class_ignore_index"])
 
         avg_loss = running_loss / max(batches, 1)
-        # Return empty timings dict for compatibility
-        timings: dict[str, float] = {}
-        return avg_loss, accumulated_cm, timings
+        return avg_loss, accumulated_cm
 
     for epoch in tqdm(range(start_epoch, epochs), desc="Epochs"):
         net.train()
 
-        avg_train_loss, _, _ = run_epoch(train_dataloader, is_train=True)
+        avg_train_loss, _ = run_epoch(train_dataloader, is_train=True)
         train_losses.append(avg_train_loss)
 
         net.eval()
-        avg_val_loss, val_confusion_matrix, val_timings = run_epoch(val_dataloader, is_train=False)
+        avg_val_loss, val_confusion_matrix = run_epoch(val_dataloader, is_train=False)
         val_losses.append(avg_val_loss)
 
         if val_confusion_matrix is None:
@@ -318,8 +314,7 @@ def training(dataset_path: Path) -> None:
     # Check for available GPU
     print("Computing with {}!".format(device))
 
-    if device.type == "cuda":
-        torch.backends.cudnn.benchmark = bool(CONFIG["cuda_cudnn_benchmark"])
+    torch.backends.cudnn.benchmark = bool(CONFIG["runtime_cudnn_benchmark"])
 
     df = create_dataframe(dataset_path)
 
@@ -384,18 +379,14 @@ def training(dataset_path: Path) -> None:
     train_dataset = SegDataset(train_df, transforms=train_transforms, preload_samples=CONFIG["preload_samples"])
     val_dataset = SegDataset(val_df, transforms=val_transforms, preload_samples=CONFIG["preload_samples"])
 
-    is_cuda = device.type == "cuda"
-    num_workers = CONFIG["cuda_num_workers"] if is_cuda else CONFIG["other_num_workers"]
-    pin_memory = bool(is_cuda and CONFIG["cuda_pin_memory"])
-
-    train_dataloader, val_dataloader, train_loader_kwargs, val_loader_kwargs = (
+    train_dataloader, val_dataloader = (
         create_data_loaders(
             train_dataset,
             val_dataset,
             CONFIG["batch_size"],
-            num_workers,
-            pin_memory,
-            is_cuda,
+            CONFIG["runtime_num_workers"],
+            CONFIG["runtime_pin_memory"],
+            CONFIG["runtime_use_cuda"],
         )
     )
 
@@ -406,12 +397,10 @@ def training(dataset_path: Path) -> None:
     draw_network_architecture(net, input_sample)
 
     train_net: nn.Module = net
-    compile_enabled = False
-    if is_cuda and CONFIG["cuda_compile_model"]:
+    if CONFIG["runtime_compile_model"]:
         if hasattr(torch, "compile"):
             try:
                 train_net = cast(nn.Module, torch.compile(net))
-                compile_enabled = True
                 print("Enabled torch.compile for CUDA training.")
             except Exception as exc:
                 print(f"torch.compile failed, using eager mode: {exc}")
@@ -419,8 +408,6 @@ def training(dataset_path: Path) -> None:
             print(
                 "torch.compile is not available in this PyTorch build; using eager mode."
             )
-
-    class_weights = compute_class_weights(train_dataset, num_classes=len(train_dataset.color_to_class))
 
     # optimizer and learning rate
     optimizer = torch.optim.AdamW(
@@ -431,51 +418,27 @@ def training(dataset_path: Path) -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
 
     # loss function
+    class_weights = compute_class_weights(train_dataset, num_classes=len(train_dataset.color_to_class))
     loss = HybridSegmentationLoss(class_weights=class_weights, ignore_index=CONFIG["class_ignore_index"])
 
     # metrics
     metrics: list[Any] = [("mIoU", lambda cm: compute_miou_from_cm(cm, ignore_index=CONFIG["class_ignore_index"]))]
 
     # Try to resume from latest checkpoint
-    checkpoint_dir = Path(f"{CONFIG['model_checkpoint_path']}") if CONFIG["model_checkpoint_path"] else None
     start_epoch = 0
-    if checkpoint_dir is not None:
-        checkpoint = None
-        try:
-            from utils import load_checkpoint
-            checkpoint = load_checkpoint(checkpoint_dir, net, optimizer, crop_size=CONFIG["transforms_random_crop_size"])
-        except Exception as e:
-            print(f"Failed to load checkpoint: {e}")
-        if checkpoint is not None:
-            start_epoch = checkpoint.get("epoch", start_epoch) + 1  # Resume from the next epoch
-            print(f"Resuming from epoch {start_epoch}")
+    try:
+        from utils import load_checkpoint
+        _, start_epoch = load_checkpoint(checkpoint_dir, net, optimizer, crop_size=CONFIG["transforms_random_crop_size"])
+        print(f"Resuming from epoch {start_epoch}")
+    except Exception as e:
+        print(f"Failed to load checkpoint: {e}")
 
-    use_amp = bool(is_cuda and CONFIG["cuda_use_amp"])
-    use_grad_scaler = bool(use_amp and CONFIG["cuda_use_grad_scaler"])
-    use_non_blocking_transfer = bool(
-        is_cuda and pin_memory and CONFIG["cuda_non_blocking_transfer"]
-    )
-
-    runtime_metadata: dict[str, Any] = {
-        "runtime_device": device.type,
-        "runtime_amp": use_amp,
-        "runtime_grad_scaler": use_grad_scaler,
-        "runtime_compile": compile_enabled,
-        "runtime_num_workers": num_workers,
-        "runtime_pin_memory": pin_memory,
-        "runtime_persistent_workers": train_loader_kwargs.get(
-            "persistent_workers", False
-        ),
-        "runtime_prefetch_factor": train_loader_kwargs.get("prefetch_factor", "none"),
-        "runtime_cudnn_benchmark": torch.backends.cudnn.benchmark if is_cuda else "n/a",
-    }
-
-    print("Runtime metadata:")
-    for key, value in runtime_metadata.items():
+    # log config to mlflow
+    print("CONFIG:")
+    for key, value in CONFIG.items():
         print(f"\t{key}: {value}")
-
     with mlflow.start_run():
-        mlflow.log_params(runtime_metadata)
+        mlflow.log_params(CONFIG)
 
         # train the network
         train_losses, val_losses = fit(
@@ -489,10 +452,10 @@ def training(dataset_path: Path) -> None:
             device=device,
             metrics=metrics,
             maximize_main_metric=True,
-            checkpoint_dir=checkpoint_dir,
-            use_amp=use_amp,
-            use_grad_scaler=use_grad_scaler,
-            use_non_blocking_transfer=use_non_blocking_transfer,
+            checkpoint_dir=CONFIG["model_checkpoint_path"],
+            use_amp=CONFIG["runtime_amp"],
+            use_grad_scaler=CONFIG["runtime_grad_scaler"],
+            use_non_blocking_transfer=CONFIG["runtime_non_blocking_transfer"],
             start_epoch=start_epoch,
         )
 

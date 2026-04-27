@@ -1,72 +1,709 @@
 strict digraph model {
-	graph [ordering=in rankdir=LR size="12.0,12.0"]
+	graph [ordering=in rankdir=TB size="50.4,50.4"]
 	node [align=left fontname="Linux libertine" fontsize=10 height=0.2 margin=0 ranksep=0.1 shape=plaintext style=filled]
 	edge [fontsize=10]
 	0 [label=<
                     <TABLE BORDER="0" CELLBORDER="1"
                     CELLSPACING="0" CELLPADDING="4">
-                        <TR><TD>input-tensor<BR/>depth:0</TD><TD>(1, 512, 1024)</TD></TR>
+                        <TR><TD>input-tensor<BR/>depth:0</TD><TD>(1, 3, 512, 1024)</TD></TR>
                     </TABLE>> fillcolor=lightyellow]
-	1 [label=<
+	subgraph cluster_2 {
+		fontsize=12 label=Sequential labeljust=l style=dashed
+		subgraph cluster_3 {
+			fontsize=12 label=Conv2dNormActivation labeljust=l style=dashed
+			1 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 3, 512, 1024) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			2 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">BatchNorm2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			3 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Hardswish<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+		subgraph cluster_4 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			4 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			5 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 16, 256, 512) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_5 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			6 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 16, 256, 512) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 24, 128, 256) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+		subgraph cluster_6 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			7 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 24, 128, 256) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 24, 128, 256) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			8 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 24, 128, 256) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 24, 128, 256) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_7 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			9 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 24, 128, 256) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+		subgraph cluster_8 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			10 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			11 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 40, 64, 128) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_9 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			12 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			13 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 40, 64, 128) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_10 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			14 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 40, 64, 128) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+		subgraph cluster_11 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			15 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			16 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 80, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_12 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			17 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			18 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 80, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_13 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			19 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			20 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 80, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_14 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			21 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 80, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 112, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+		subgraph cluster_15 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			22 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 112, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 112, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			23 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 112, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 112, 32, 64) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_16 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			24 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 112, 32, 64) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+		subgraph cluster_17 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			25 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			26 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 160, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_18 {
+			fontsize=12 label=InvertedResidual labeljust=l style=dashed
+			27 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Sequential<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			28 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">add_<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">2 x (1, 160, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		}
+		subgraph cluster_19 {
+			fontsize=12 label=Conv2dNormActivation labeljust=l style=dashed
+			29 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 160, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			30 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">BatchNorm2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			31 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Hardswish<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+	}
+	subgraph cluster_20 {
+		fontsize=12 label=ASPP labeljust=l style=dashed
+		32 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:2</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		33 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:2</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		34 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:2</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		35 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:2</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		subgraph cluster_21 {
+			fontsize=12 label=Sequential labeljust=l style=dashed
+			36 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">AdaptiveAvgPool2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 960, 1, 1) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			37 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 960, 1, 1) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 1, 1) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+		38 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">interpolate<BR/>depth:2</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 256, 1, 1) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		39 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">cat<BR/>depth:2</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">5 x (1, 256, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 1280, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=aliceblue]
+		subgraph cluster_22 {
+			fontsize=12 label=Sequential labeljust=l style=dashed
+			40 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">Conv2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 1280, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			41 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">BatchNorm2d<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+			42 [label=<
+                    <TABLE BORDER="0" CELLBORDER="1"
+                    CELLSPACING="0" CELLPADDING="4">
+                    <TR>
+                        <TD ROWSPAN="2">ReLU<BR/>depth:3</TD>
+                        <TD COLSPAN="2">input:</TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    <TR>
+                        <TD COLSPAN="2">output: </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
+                    </TR>
+                    </TABLE>> fillcolor=darkseagreen1]
+		}
+	}
+	43 [label=<
                     <TABLE BORDER="0" CELLBORDER="1"
                     CELLSPACING="0" CELLPADDING="4">
                     <TR>
                         <TD ROWSPAN="2">Conv2d<BR/>depth:1</TD>
                         <TD COLSPAN="2">input:</TD>
-                        <TD COLSPAN="2">(1, 512, 1024) </TD>
+                        <TD COLSPAN="2">(1, 256, 16, 32) </TD>
                     </TR>
                     <TR>
                         <TD COLSPAN="2">output: </TD>
-                        <TD COLSPAN="2">(20, 508, 1020) </TD>
+                        <TD COLSPAN="2">(1, 8, 16, 32) </TD>
                     </TR>
                     </TABLE>> fillcolor=darkseagreen1]
-	2 [label=<
+	44 [label=<
                     <TABLE BORDER="0" CELLBORDER="1"
                     CELLSPACING="0" CELLPADDING="4">
                     <TR>
-                        <TD ROWSPAN="2">relu<BR/>depth:1</TD>
+                        <TD ROWSPAN="2">interpolate<BR/>depth:1</TD>
                         <TD COLSPAN="2">input:</TD>
-                        <TD COLSPAN="2">(20, 508, 1020) </TD>
+                        <TD COLSPAN="2">(1, 8, 16, 32) </TD>
                     </TR>
                     <TR>
                         <TD COLSPAN="2">output: </TD>
-                        <TD COLSPAN="2">(20, 508, 1020) </TD>
+                        <TD COLSPAN="2">(1, 8, 512, 1024) </TD>
                     </TR>
                     </TABLE>> fillcolor=aliceblue]
-	3 [label=<
+	45 [label=<
                     <TABLE BORDER="0" CELLBORDER="1"
                     CELLSPACING="0" CELLPADDING="4">
-                    <TR>
-                        <TD ROWSPAN="2">Conv2d<BR/>depth:1</TD>
-                        <TD COLSPAN="2">input:</TD>
-                        <TD COLSPAN="2">(20, 508, 1020) </TD>
-                    </TR>
-                    <TR>
-                        <TD COLSPAN="2">output: </TD>
-                        <TD COLSPAN="2">(20, 504, 1016) </TD>
-                    </TR>
-                    </TABLE>> fillcolor=darkseagreen1]
-	4 [label=<
-                    <TABLE BORDER="0" CELLBORDER="1"
-                    CELLSPACING="0" CELLPADDING="4">
-                    <TR>
-                        <TD ROWSPAN="2">relu<BR/>depth:1</TD>
-                        <TD COLSPAN="2">input:</TD>
-                        <TD COLSPAN="2">(20, 504, 1016) </TD>
-                    </TR>
-                    <TR>
-                        <TD COLSPAN="2">output: </TD>
-                        <TD COLSPAN="2">(20, 504, 1016) </TD>
-                    </TR>
-                    </TABLE>> fillcolor=aliceblue]
-	5 [label=<
-                    <TABLE BORDER="0" CELLBORDER="1"
-                    CELLSPACING="0" CELLPADDING="4">
-                        <TR><TD>output-tensor<BR/>depth:0</TD><TD>(20, 504, 1016)</TD></TR>
+                        <TR><TD>output-tensor<BR/>depth:0</TD><TD>(1, 8, 512, 1024)</TD></TR>
                     </TABLE>> fillcolor=lightyellow]
 	0 -> 1
 	1 -> 2
 	2 -> 3
 	3 -> 4
+	3 -> 5
 	4 -> 5
+	5 -> 6
+	6 -> 7
+	6 -> 8
+	7 -> 8
+	8 -> 9
+	9 -> 10
+	9 -> 11
+	10 -> 11
+	11 -> 12
+	11 -> 13
+	12 -> 13
+	13 -> 14
+	14 -> 15
+	14 -> 16
+	15 -> 16
+	16 -> 17
+	16 -> 18
+	17 -> 18
+	18 -> 19
+	18 -> 20
+	19 -> 20
+	20 -> 21
+	21 -> 22
+	21 -> 23
+	22 -> 23
+	23 -> 24
+	24 -> 25
+	24 -> 26
+	25 -> 26
+	26 -> 27
+	26 -> 28
+	27 -> 28
+	28 -> 29
+	29 -> 30
+	30 -> 31
+	31 -> 32
+	31 -> 33
+	31 -> 34
+	31 -> 35
+	32 -> 39
+	33 -> 39
+	34 -> 39
+	35 -> 39
+	31 -> 36
+	36 -> 37
+	37 -> 38
+	38 -> 39
+	39 -> 40
+	40 -> 41
+	41 -> 42
+	42 -> 43
+	43 -> 44
+	44 -> 45
 }

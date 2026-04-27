@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Any
 
 from matplotlib import pyplot as plt
 import mlflow
@@ -61,6 +62,7 @@ def create_dataframe(dataset_path) -> DataFrame:
             )
     return DataFrame(samples)
 
+
 def create_dataframe_tiny_set(dataset_path, num_samples: int = 10) -> DataFrame:
     """Creates a tiny dataframe from the given dataset path.
     This function is used for testing purposes.
@@ -99,26 +101,41 @@ def create_dataframe_tiny_set(dataset_path, num_samples: int = 10) -> DataFrame:
             break
     return DataFrame(samples)
 
+
 def compose_checkpoint_path(checkpoint_dir: Path, model, optimizer, crop_size) -> Path:
     """Compose a checkpoint path based on the model, optimizer, and crop size."""
-    path = checkpoint_dir / f"{model.__class__.__name__}_opt_{optimizer.__class__.__name__}_crop_{crop_size}_best"
+    path = (
+        checkpoint_dir
+        / f"{model.__class__.__name__}_opt_{optimizer.__class__.__name__}_crop_{crop_size}_best"
+    )
     return path.with_suffix(".pt")
+
 
 def save_checkpoint(model, optimizer, epoch, metrics, checkpoint_dir: Path, crop_size):
     """Save model checkpoint."""
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     path = compose_checkpoint_path(checkpoint_dir, model, optimizer, crop_size)
-    torch.save({
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "metrics": metrics,
-        "model_class": model.__class__.__name__,
-    }, path)
+    torch.save(
+        {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "metrics": metrics,
+            "model_class": model.__class__.__name__,
+        },
+        path,
+    )
 
 
-def load_checkpoint(checkpoint_dir: Path, model, optimizer, crop_size):
+def load_checkpoint(
+    checkpoint_dir: Path | None, model, optimizer, crop_size
+) -> tuple[dict[str, Any] | None, int] | None:
     """Load model checkpoint."""
+    if checkpoint_dir is None:
+        raise ValueError(
+            "No checkpoint directory provided, skipping checkpoint loading."
+        )
+
     path = compose_checkpoint_path(checkpoint_dir, model, optimizer, crop_size)
 
     checkpoint = torch.load(path, map_location=device, weights_only=False)
@@ -126,13 +143,17 @@ def load_checkpoint(checkpoint_dir: Path, model, optimizer, crop_size):
     model.load_state_dict(checkpoint["model_state_dict"])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    return checkpoint
+    return checkpoint, checkpoint["epoch"]
 
-    
-def plot_and_save_confusion_matrix(cm: torch.Tensor, class_names: list[str], epoch: int) -> None:
+
+def plot_and_save_confusion_matrix(
+    cm: torch.Tensor, class_names: list[str], epoch: int
+) -> None:
     """Plot and save confusion matrix."""
     # Plot and log confusion matrix
-    cm_fig = plot_confusion_matrix(cm, num_classes=len(class_names), class_names=class_names)
+    cm_fig = plot_confusion_matrix(
+        cm, num_classes=len(class_names), class_names=class_names
+    )
     mlflow.log_figure(cm_fig, f"confusion_matrix_epoch_{epoch}.png")
     plt.close(cm_fig)
 
