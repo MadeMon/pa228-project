@@ -1,3 +1,4 @@
+# STUDENT's UČO: 514143
 
 from pathlib import Path
 
@@ -11,7 +12,6 @@ import os
 from label_dict import label_dict
 from utils import create_dataframe, sample_id_from_name
 
-# STUDENT's UČO: 514143
 
 PROJECT_ROOT = Path(__file__).resolve().parents[0]
 DATA_DIR = PROJECT_ROOT / "data_seg_public"

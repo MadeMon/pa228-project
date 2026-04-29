@@ -1,3 +1,5 @@
+# STUDENT's UČO: 514143
+
 # dictionary with class names and corresponding colors
 label_dict = {
     'void':         (0, 0, 0), 

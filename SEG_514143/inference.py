@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from network import ModelLRASPP
+from label_dict import label_dict
+from network import ModelCustom
 from PIL import Image
 
 from utils import device
@@ -33,12 +34,13 @@ def inference(dataset_path: Path, model_path: Path) -> None:
     print("Computing with {}!".format(device))
 
     # loading the model
-    model = ModelLRASPP()
+    model = ModelCustom(len(label_dict))
     state_dict = torch.load(model_path)
     model.load_state_dict(state_dict)
     model.eval()
 
     for i in range(0, 3):
+        # TODO perform inference on the dataset and save the predictions to output_predictions folder
         # generate a random image and save it to output_predictions
         random_image = np.astype(np.random.rand(50, 50, 3) * 255, np.uint8)
         Image.fromarray(random_image).save(f"output_predictions/random_image_{i}.png")

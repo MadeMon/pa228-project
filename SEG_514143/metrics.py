@@ -1,3 +1,5 @@
+# STUDENT's UČO: 514143
+
 from dataclasses import dataclass
 
 import torch

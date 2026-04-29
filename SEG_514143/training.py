@@ -200,9 +200,7 @@ def fit(
 
     def run_epoch(
         dataloader: DataLoader, is_train: bool
-    ) -> tuple[
-        float, torch.Tensor | None, dict[str, float]
-    ]:
+    ) -> tuple[float, torch.Tensor | None]:
         running_loss = 0.0
         batches = 0
         accumulated_cm = None
@@ -354,15 +352,6 @@ def training(dataset_path: Path) -> None:
             ),
             A.HorizontalFlip(p=0.5),
             A.RandomBrightnessContrast(p=0.2),
-
-            # Alternative to ColorJitter
-            # A.ColorJitter(
-            #     brightness=0.2,
-            #     contrast=0.2,
-            #     saturation=0.2,
-            #     hue=0.05,
-            #     p=0.3,
-            # ),
         ])
 
     train_transforms_list.append(
@@ -396,6 +385,7 @@ def training(dataset_path: Path) -> None:
     input_sample = torch.zeros((1, 3, 512, 1024))
     draw_network_architecture(net, input_sample)
 
+    # network
     train_net: nn.Module = net
     if CONFIG["runtime_compile_model"]:
         if hasattr(torch, "compile"):
@@ -409,7 +399,7 @@ def training(dataset_path: Path) -> None:
                 "torch.compile is not available in this PyTorch build; using eager mode."
             )
 
-    # optimizer and learning rate
+    # optimizer and learning rate scheduler
     optimizer = torch.optim.AdamW(
         train_net.parameters(),
         lr=CONFIG["learning_rate"],
@@ -428,7 +418,7 @@ def training(dataset_path: Path) -> None:
     start_epoch = 0
     try:
         from utils import load_checkpoint
-        _, start_epoch = load_checkpoint(checkpoint_dir, net, optimizer, crop_size=CONFIG["transforms_random_crop_size"])
+        _, start_epoch = load_checkpoint(CONFIG["model_checkpoint_path"], net, optimizer, crop_size=CONFIG["transforms_random_crop_size"])
         print(f"Resuming from epoch {start_epoch}")
     except Exception as e:
         print(f"Failed to load checkpoint: {e}")
@@ -459,7 +449,7 @@ def training(dataset_path: Path) -> None:
             start_epoch=start_epoch,
         )
 
-    # save the trained model and plot the losses, feel free to create your own functions
+    # save the trained model and plot the losses
     torch.save(net.state_dict(), "model.pt")
     plot_learning_curves(train_losses, val_losses)
 

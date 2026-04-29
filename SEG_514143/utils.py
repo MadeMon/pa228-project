@@ -1,3 +1,5 @@
+# STUDENT's UČO: 514143
+
 import os
 from pathlib import Path
 from typing import Any
@@ -129,7 +131,7 @@ def save_checkpoint(model, optimizer, epoch, metrics, checkpoint_dir: Path, crop
 
 def load_checkpoint(
     checkpoint_dir: Path | None, model, optimizer, crop_size
-) -> tuple[dict[str, Any] | None, int] | None:
+) -> tuple[dict[str, Any] | None, int]:
     """Load model checkpoint."""
     if checkpoint_dir is None:
         raise ValueError(

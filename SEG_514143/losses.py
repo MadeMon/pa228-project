@@ -1,3 +1,5 @@
+# STUDENT's UČO: 514143
+
 import numpy as np
 import torch
 import torch.nn as nn
