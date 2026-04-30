@@ -7,13 +7,22 @@
 from argparse import ArgumentParser
 from pathlib import Path
 
+import albumentations as A
 import numpy as np
+import pandas as pd
 import torch
-from label_dict import label_dict
-from network import ModelCustom
 from PIL import Image
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from config import CONFIG
+from dataset import SegDataset
+from label_dict import label_dict
+from network import MobilnetASPP
 
 from utils import device
+
+# Pre-built color lookup table: shape (num_classes, 3)
+_COLOR_LUT = np.array(list(label_dict.values()), dtype=np.uint8)
 
 
 # declaration for this function should not be changed
@@ -34,16 +43,67 @@ def inference(dataset_path: Path, model_path: Path) -> None:
     print("Computing with {}!".format(device))
 
     # loading the model
-    model = ModelCustom(len(label_dict))
-    state_dict = torch.load(model_path)
+    model = MobilnetASPP(len(label_dict))
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    state_dict = (
+        checkpoint["model_state_dict"]
+        if "model_state_dict" in checkpoint
+        else checkpoint
+    )
     model.load_state_dict(state_dict)
+    model.to(device)
     model.eval()
 
-    for i in range(0, 3):
-        # TODO perform inference on the dataset and save the predictions to output_predictions folder
-        # generate a random image and save it to output_predictions
-        random_image = np.astype(np.random.rand(50, 50, 3) * 255, np.uint8)
-        Image.fromarray(random_image).save(f"output_predictions/random_image_{i}.png")
+    output_dir = Path("output_predictions")
+    output_dir.mkdir(exist_ok=True)
+
+    # find all images in the dataset
+    img_dir = dataset_path / "img"
+    if not img_dir.exists():
+        print(f"Error: Image directory not found at {img_dir}")
+        return
+    image_files = list(img_dir.rglob("*_leftImg8bit.png"))
+    if not image_files:
+        print(f"No images found in {img_dir}")
+        return
+    print(f"Found {len(image_files)} images to process")
+
+    # dataset and dataloader
+    infer_transforms = A.Compose(
+        [
+            A.Normalize(
+                mean=CONFIG["transforms_normalize_mean"],
+                std=CONFIG["transforms_normalize_std"],
+            ),
+        ]
+    )
+    df = pd.DataFrame({"img_path": [str(p) for p in image_files]})
+    dataset = SegDataset(
+        df,
+        transforms=infer_transforms,
+        inference_mode=True,
+        preload_samples=CONFIG["preload_samples"],
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=128,
+        num_workers=CONFIG["runtime_num_workers"],
+        pin_memory=CONFIG["runtime_pin_memory"],
+    )
+
+    # inference loop
+    for images, _, img_paths in tqdm(loader, desc="Processing images"):
+        images = images.to(device, non_blocking=True)
+
+        with torch.autocast(device_type=device.type, enabled=CONFIG["runtime_amp"]):
+            output = model(images)
+
+        logits = output["out"] if isinstance(output, dict) else output
+        predictions_np = logits.argmax(dim=1).cpu().numpy().astype(np.uint8)
+
+        for pred, img_path in zip(predictions_np, img_paths):
+            pred_rgb = _COLOR_LUT[pred]
+            Image.fromarray(pred_rgb).save(output_dir / Path(img_path).name)
 
 
 # #### code below should not be changed ############################################################################

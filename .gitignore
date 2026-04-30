@@ -226,5 +226,6 @@ SEG_514143/debug_rare_crops/*
 SEG_514143/mlartifacts/*
 SEG_514143/models/*
 SEG_514143/scripts/*
+SEG_514143/output_predictions/*
 *.npy
 .DS_Store

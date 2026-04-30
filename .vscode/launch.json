@@ -1,13 +1,23 @@
 {
     "configurations": [
         {
-            "name": "Debug Training",
+            "name": "Training",
             "type": "debugpy",
             "request": "launch",
             "program": "training.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/SEG_514143",
-            "args": "data_seg_public"
+            "args": ["data_seg_public"]
+        },
+        {
+            "name": "Inference",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "inference.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/SEG_514143",
+            // "args": ["data_seg_public", "models/OptimizedModule_opt_AdamW_crop_512_best.pt"]
+            "args": ["data_seg_public", "model.pt"]
         }
     ]
 }

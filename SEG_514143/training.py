@@ -7,7 +7,6 @@
 from argparse import ArgumentParser
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass
 from pathlib import Path
 import random
 from typing import Any, Optional, Tuple, cast
@@ -17,18 +16,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from tqdm import tqdm
-from label_dict import label_dict
-from metrics import MetricResult, aggregate_metric_results, compute_miou_from_cm, plot_confusion_matrix, update_confusion_matrix
+from metrics import (
+    MetricResult,
+    compute_miou_from_cm,
+    update_confusion_matrix,
+)
 from losses import HybridSegmentationLoss, compute_class_weights
 from rare_crops import MixedCropTransform
 from dataset import SegDataset
-from network import ModelCustom, ModelLRASPP
 from torch import Tensor, nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 from torchview import draw_graph
 
 
+from config import CONFIG
 from utils import create_dataframe, device, save_checkpoint
 
 import albumentations as A
@@ -36,6 +38,7 @@ import albumentations as A
 import mlflow
 
 import ssl
+
 ssl._create_default_https_context = ssl._create_unverified_context
 
 import os
@@ -43,46 +46,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-mlflow.login(backend="databricks", interactive=False)
-mlflow.set_experiment(f"/Users/{os.getenv('DATABRICKS_MLFLOW_USERNAME')}/segmentation_experiment")    
+if (
+    os.getenv("DATABRICKS_MLFLOW_USERNAME")
+    and os.getenv("DATABRICKS_HOST")
+    and os.getenv("DATABRICKS_TOKEN")
+):
+    mlflow.login(backend="databricks", interactive=False)
+    mlflow.set_experiment(
+        f"/Users/{os.getenv('DATABRICKS_MLFLOW_USERNAME')}/segmentation_experiment"
+    )
 
 # fix seeds for reproducibility
 torch.manual_seed(42)
 np.random.seed(42)
 random.seed(42)
-
-TRAINING_SCHEDULER: Any | None = None
-
-CONFIG: dict[str, Any] = {
-    "runtime_device": device.type,
-    "runtime_amp": True,
-    "runtime_grad_scaler": True,
-    "runtime_num_workers": 0,
-    "runtime_pin_memory": True,
-    "runtime_persistent_workers": True,
-    "runtime_prefetch_factor": 2,
-    "runtime_cudnn_benchmark": True,
-    "runtime_non_blocking_transfer": True,
-    "runtime_compile_model": True,
-    "num_classes": len(label_dict),
-    "batch_size": 64,
-    "epochs": 30,
-    "learning_rate": 1e-3,
-    "optimizer_weight_decay": 1e-4,
-    "transforms_random_crop_size": 512,  # 512, 256, None
-    "transforms_rare_crop_prob": 0.5,
-    "rare_classes": [
-        3,  # object
-        6,  # human
-    ],
-    "debug_dir_rare_crops": None,  # "debug_rare_crops", None
-    "class_ignore_index": 0,  # 0 is the "void" class
-    "test_mode": False,  # use subset of 10 samples to test the training pipeline - try to overfit the model on this tiny dataset, if it doesn't work, there is likely a bug in the training pipeline
-    "model_checkpoint_path": Path("models"),
-    "other_num_workers": 0,
-    "preload_samples": True,
-    "network": ModelCustom(len(label_dict)),
-}
 
 
 def create_data_loaders(
@@ -120,6 +97,7 @@ def create_data_loaders(
     val_dataloader = DataLoader(val_dataset, **val_loader_kwargs)
     return train_dataloader, val_dataloader
 
+
 def split_dataframe(df, train_ratio: float = 0.7, val_ratio: float = 0.2):
     total_samples = len(df)
     train_size = int(total_samples * train_ratio)
@@ -127,8 +105,8 @@ def split_dataframe(df, train_ratio: float = 0.7, val_ratio: float = 0.2):
 
     permutation = torch.randperm(total_samples)
     train_idx = permutation[:train_size].tolist()
-    val_idx = permutation[train_size:train_size + val_size].tolist()
-    test_idx = permutation[train_size + val_size:].tolist()
+    val_idx = permutation[train_size : train_size + val_size].tolist()
+    test_idx = permutation[train_size + val_size :].tolist()
 
     train_df = df.iloc[train_idx].reset_index(drop=True)
     val_df = df.iloc[val_idx].reset_index(drop=True)
@@ -163,10 +141,12 @@ def plot_learning_curves(
     plt.legend()
     plt.savefig("learning_curves.png")
 
+
 def autocast_context(use_amp) -> Any:
     if use_amp:
         return torch.autocast(device_type="cuda", dtype=torch.float16)
     return nullcontext()
+
 
 # sample function for training
 def fit(
@@ -178,7 +158,7 @@ def fit(
     optimizer: Optimizer,
     scheduler: Optional[torch.optim.lr_scheduler.LRScheduler],
     device: torch.device,
-    metrics: list[Tuple[str,Callable[[Tensor], MetricResult]]],
+    metrics: list[Tuple[str, Callable[[Tensor], MetricResult]]],
     main_metric_name: str = "mIoU",
     maximize_main_metric: bool = True,
     checkpoint_dir: Optional[Path] = None,
@@ -206,7 +186,10 @@ def fit(
         accumulated_cm = None
 
         with torch.set_grad_enabled(is_train):
-            for images, targets in tqdm(dataloader, desc="{} Batches".format("Training" if is_train else "Validation")):
+            for images, targets, _ in tqdm(
+                dataloader,
+                desc="{} Batches".format("Training" if is_train else "Validation"),
+            ):
                 if is_train:
                     optimizer.zero_grad(set_to_none=True)
 
@@ -242,10 +225,18 @@ def fit(
 
                 # For validation, accumulate confusion matrix
                 if not is_train:
-                    preds_for_cm = preds_out["out"] if isinstance(preds_out, dict) else preds_out
+                    preds_for_cm = (
+                        preds_out["out"] if isinstance(preds_out, dict) else preds_out
+                    )
                     num_classes = preds_for_cm.shape[1]
                     # Use the on-device long targets for confusion matrix accumulation.
-                    accumulated_cm = update_confusion_matrix(accumulated_cm, preds_for_cm, targets_long, num_classes, ignore_index=CONFIG["class_ignore_index"])
+                    accumulated_cm = update_confusion_matrix(
+                        accumulated_cm,
+                        preds_for_cm,
+                        targets_long,
+                        num_classes,
+                        ignore_index=CONFIG["class_ignore_index"],
+                    )
 
         avg_loss = running_loss / max(batches, 1)
         return avg_loss, accumulated_cm
@@ -286,8 +277,29 @@ def fit(
                     print(f"\t\tClass {cls}: {value:.4f}")
 
         # Save checkpoint every epoch
-        if checkpoint_dir is not None and ((maximize_main_metric and val_metrics_results[main_metric_name].main > best_main_metric) or (not maximize_main_metric and val_metrics_results[main_metric_name].main < best_main_metric)):
-            save_checkpoint(net, optimizer, epoch, {"train_loss": avg_train_loss, "val_loss": avg_val_loss, **val_metrics_results}, checkpoint_dir, crop_size = CONFIG["transforms_random_crop_size"])
+        if checkpoint_dir is not None and (
+            (
+                maximize_main_metric
+                and val_metrics_results[main_metric_name].main > best_main_metric
+            )
+            or (
+                not maximize_main_metric
+                and val_metrics_results[main_metric_name].main < best_main_metric
+            )
+        ):
+            unwrapped_net = getattr(net, "_orig_mod", net)
+            save_checkpoint(
+                unwrapped_net,
+                optimizer,
+                epoch,
+                {
+                    "train_loss": avg_train_loss,
+                    "val_loss": avg_val_loss,
+                    **val_metrics_results,
+                },
+                checkpoint_dir,
+                crop_size=CONFIG["transforms_random_crop_size"],
+            )
 
         if scheduler is not None:
             scheduler.step()
@@ -317,66 +329,74 @@ def training(dataset_path: Path) -> None:
 
     train_df, val_df, _ = split_dataframe(df)
 
-    if CONFIG["test_mode"]:
-        train_df = train_df.head(10)
-        val_df = train_df
-
     # transforms
     train_transforms_list = []
 
-    if not CONFIG["test_mode"]:
-        if CONFIG["transforms_random_crop_size"]:
-            train_transforms_list.append(
-                MixedCropTransform(
-                    width=CONFIG["transforms_random_crop_size"],
-                    height=CONFIG["transforms_random_crop_size"],
-                    rare_classes=CONFIG["rare_classes"],
-                    rare_prob=CONFIG["transforms_rare_crop_prob"],
-                    debug_dir=CONFIG["debug_dir_rare_crops"]
-                )
+    if CONFIG["transforms_random_crop_size"]:
+        train_transforms_list.append(
+            MixedCropTransform(
+                width=CONFIG["transforms_random_crop_size"],
+                height=CONFIG["transforms_random_crop_size"],
+                rare_classes=CONFIG["transforms_rare_classes"],
+                rare_prob=CONFIG["transforms_rare_crop_prob"],
+                debug_dir=CONFIG["debug_dir_rare_crops"],
             )
-        else:
-            train_transforms_list.append(
-                A.RandomCrop(width=CONFIG["transforms_random_crop_size"], height=CONFIG["transforms_random_crop_size"])
+        )
+    else:
+        train_transforms_list.append(
+            A.RandomCrop(
+                width=CONFIG["transforms_random_crop_size"],
+                height=CONFIG["transforms_random_crop_size"],
             )
+        )
 
-        train_transforms_list.extend([
+    train_transforms_list.extend(
+        [
             A.ShiftScaleRotate(
                 shift_limit=0.05,
                 scale_limit=0.10,
                 rotate_limit=5,
                 border_mode=cv2.BORDER_CONSTANT,
-                value=0,
-                mask_value=CONFIG["class_ignore_index"],
                 p=0.5,
             ),
             A.HorizontalFlip(p=0.5),
             A.RandomBrightnessContrast(p=0.2),
-        ])
+        ]
+    )
 
     train_transforms_list.append(
-        A.Normalize(mean=(0.485, 0.456, 0.406),
-            std=(0.229, 0.224, 0.225)),
+        A.Normalize(
+            mean=CONFIG["transforms_normalize_mean"],
+            std=CONFIG["transforms_normalize_std"],
+        ),
     )
 
     train_transforms = A.Compose(train_transforms_list)
-    val_transforms = A.Compose([A.Normalize(mean=(0.485, 0.456, 0.406),
-            std=(0.229, 0.224, 0.225))])
+    val_transforms = A.Compose(
+        [
+            A.Normalize(
+                mean=CONFIG["transforms_normalize_mean"],
+                std=CONFIG["transforms_normalize_std"],
+            )
+        ]
+    )
 
     # dataset and dataloader
-    train_dataset = SegDataset(train_df, transforms=train_transforms, preload_samples=CONFIG["preload_samples"])
-    val_dataset = SegDataset(val_df, transforms=val_transforms, preload_samples=CONFIG["preload_samples"])
+    train_dataset = SegDataset(
+        train_df, transforms=train_transforms, preload_samples=CONFIG["preload_samples"]
+    )
+    val_dataset = SegDataset(
+        val_df, transforms=val_transforms, preload_samples=CONFIG["preload_samples"]
+    )
 
-    train_dataloader, val_dataloader = (
-        create_data_loaders(
-            train_dataset,
-            val_dataset,
-            CONFIG["batch_size"],
-            CONFIG["runtime_num_workers"],
-            CONFIG["runtime_pin_memory"],
-            CONFIG["runtime_persistent_workers"],
-            CONFIG["runtime_prefetch_factor"],
-        )
+    train_dataloader, val_dataloader = create_data_loaders(
+        train_dataset,
+        val_dataset,
+        CONFIG["batch_size"],
+        CONFIG["runtime_num_workers"],
+        CONFIG["runtime_pin_memory"],
+        CONFIG["runtime_persistent_workers"],
+        CONFIG["runtime_prefetch_factor"],
     )
 
     net = CONFIG["network"]
@@ -385,7 +405,65 @@ def training(dataset_path: Path) -> None:
     input_sample = torch.zeros((1, 3, 512, 1024))
     draw_network_architecture(net, input_sample)
 
-    # network
+    # optimizer and learning rate scheduler
+    optimizer = torch.optim.AdamW(
+        net.parameters(),
+        lr=CONFIG["learning_rate"],
+        weight_decay=CONFIG["optimizer_weight_decay"],
+    )
+    num_training_steps = CONFIG["epochs"]
+    warmup_steps = max(1, int(CONFIG["warmup_ratio"] * num_training_steps))
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer,
+        start_factor=1e-4,
+        end_factor=1.0,
+        total_iters=warmup_steps,
+    )
+    poly_scheduler = torch.optim.lr_scheduler.PolynomialLR(
+        optimizer,
+        total_iters=num_training_steps - warmup_steps,
+        power=0.9,
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, poly_scheduler],
+        milestones=[warmup_steps],
+    )
+
+    # loss function
+    class_weights = compute_class_weights(
+        train_dataset, num_classes=len(train_dataset.color_to_class)
+    )
+    loss = HybridSegmentationLoss(
+        class_weights=class_weights, ignore_index=CONFIG["class_ignore_index"]
+    )
+
+    # metrics
+    metrics: list[Any] = [
+        (
+            "mIoU",
+            lambda cm: compute_miou_from_cm(
+                cm, ignore_index=CONFIG["class_ignore_index"]
+            ),
+        )
+    ]
+
+    # Try to resume from latest checkpoint
+    start_epoch = 0
+    try:
+        from utils import load_checkpoint
+
+        _, start_epoch = load_checkpoint(
+            CONFIG["model_checkpoint_path"],
+            net,
+            optimizer,
+            crop_size=CONFIG["transforms_random_crop_size"],
+        )
+        print(f"Resuming from epoch {start_epoch}")
+    except Exception as e:
+        print(f"Failed to load checkpoint: {e}")
+
+    # compile the model
     train_net: nn.Module = net
     if CONFIG["runtime_compile_model"]:
         if hasattr(torch, "compile"):
@@ -398,30 +476,6 @@ def training(dataset_path: Path) -> None:
             print(
                 "torch.compile is not available in this PyTorch build; using eager mode."
             )
-
-    # optimizer and learning rate scheduler
-    optimizer = torch.optim.AdamW(
-        train_net.parameters(),
-        lr=CONFIG["learning_rate"],
-        weight_decay=CONFIG["optimizer_weight_decay"],
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=CONFIG["epochs"])
-
-    # loss function
-    class_weights = compute_class_weights(train_dataset, num_classes=len(train_dataset.color_to_class))
-    loss = HybridSegmentationLoss(class_weights=class_weights, ignore_index=CONFIG["class_ignore_index"])
-
-    # metrics
-    metrics: list[Any] = [("mIoU", lambda cm: compute_miou_from_cm(cm, ignore_index=CONFIG["class_ignore_index"]))]
-
-    # Try to resume from latest checkpoint
-    start_epoch = 0
-    try:
-        from utils import load_checkpoint
-        _, start_epoch = load_checkpoint(CONFIG["model_checkpoint_path"], net, optimizer, crop_size=CONFIG["transforms_random_crop_size"])
-        print(f"Resuming from epoch {start_epoch}")
-    except Exception as e:
-        print(f"Failed to load checkpoint: {e}")
 
     # log config to mlflow
     print("CONFIG:")

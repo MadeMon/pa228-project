@@ -37,3 +37,4 @@ distribution = false
 [tool.pdm.scripts]
 train = "python training.py data_seg_public"
 mlflow = "mlflow server --host 127.0.0.1 --port 5000"
+infer = "python inference.py data_seg_public models/ModelCustom_opt_AdamW_crop_512_best.pt"

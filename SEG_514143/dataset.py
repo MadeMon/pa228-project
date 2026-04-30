@@ -18,10 +18,17 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 
-class SegDataset(Dataset[tuple[Tensor, Tensor]]):
-    def __init__(self, df: DataFrame, transforms: Compose | None = None, preload_samples: bool = False) -> None:
+class SegDataset(Dataset[tuple[Tensor, Tensor, str]]):
+    def __init__(
+        self,
+        df: DataFrame,
+        transforms: Compose | None = None,
+        preload_samples: bool = False,
+        inference_mode: bool = False,
+    ) -> None:
         self.df = df.reset_index(drop=True)
         self.transforms = transforms
+        self.inference_mode = inference_mode
         self.color_to_class = {
             color: class_idx for class_idx, color in enumerate(label_dict.values())
         }
@@ -49,22 +56,28 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
         # No unknown pixels remain; cast to uint8 to store masks compactly (0..num_classes-1)
         return class_mask.astype(np.uint8)
 
-    def _load_single_sample(self, img_path: Path, mask_path: Path) -> dict[str, Any]:
+    def _load_single_sample(
+        self, img_path: Path, mask_path: Path | None = None
+    ) -> dict[str, Any]:
         image = np.array(Image.open(img_path).convert("RGB"), dtype=np.uint8)
-        mask_rgb = np.array(Image.open(mask_path).convert("RGB"), dtype=np.uint8)
-        mask = self._rgb_mask_to_class(mask_rgb, mask_path)
-        return {
-            "image": image,
-            "mask": mask,
-            "img_path": img_path,
-            "mask_path": mask_path,
-        }
+        result: dict[str, Any] = {"image": image, "img_path": img_path}
+        if mask_path is not None:
+            mask_rgb = np.array(Image.open(mask_path).convert("RGB"), dtype=np.uint8)
+            result["mask"] = self._rgb_mask_to_class(mask_rgb, mask_path)
+            result["mask_path"] = mask_path
+        return result
 
     def _preload_samples(self) -> list[dict[str, Any]]:
-        indexed_paths = [
-            (idx, Path(row.img_path), Path(row.mask_path))
-            for idx, row in enumerate(self.df.itertuples(index=False))
-        ]
+        if self.inference_mode:
+            indexed_paths: list[tuple[int, Path, Path | None]] = [
+                (idx, Path(row.img_path), None)
+                for idx, row in enumerate(self.df.itertuples(index=False))
+            ]
+        else:
+            indexed_paths = [
+                (idx, Path(row.img_path), Path(row.mask_path))
+                for idx, row in enumerate(self.df.itertuples(index=False))
+            ]
         if not indexed_paths:
             return []
 
@@ -87,14 +100,25 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
         loaded.sort(key=lambda item: item[0])
         return [sample for _, sample in loaded]
 
-    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor, str]:
         if self.samples:
             sample = self.samples[idx]
         else:
             row = self.df.iloc[idx]
-            sample = self._load_single_sample(Path(row.img_path), Path(row.mask_path))
+            mask_path = None if self.inference_mode else Path(row.mask_path)
+            sample = self._load_single_sample(Path(row.img_path), mask_path)
 
         image = sample["image"].copy()
+        img_path = str(sample["img_path"])
+
+        if self.inference_mode:
+            if self.transforms is not None:
+                image = self.transforms(image=image)["image"]
+            image_tensor = torch.from_numpy(
+                np.ascontiguousarray(image.transpose(2, 0, 1))
+            ).float()
+            return image_tensor, torch.empty(0, dtype=torch.uint8), img_path
+
         mask = sample["mask"].copy()
 
         if self.transforms is not None:
@@ -106,4 +130,4 @@ class SegDataset(Dataset[tuple[Tensor, Tensor]]):
         # Keep masks compact on CPU/pinned memory as uint8 (1 byte per pixel).
         # Cast to `long` only on-device during training to satisfy loss/metrics.
         mask_tensor = torch.from_numpy(mask.astype(np.uint8))
-        return image_tensor, mask_tensor
+        return image_tensor, mask_tensor, img_path

@@ -11,7 +11,9 @@ from PIL import Image
 from label_dict import label_dict
 
 
-def _pad_bottom_right(array: np.ndarray, pad_h: int, pad_w: int, fill_value: int) -> np.ndarray:
+def _pad_bottom_right(
+    array: np.ndarray, pad_h: int, pad_w: int, fill_value: int
+) -> np.ndarray:
     if pad_h <= 0 and pad_w <= 0:
         return array
 
@@ -53,13 +55,30 @@ def _sample_crop_top_left(
 
     jitter_y = max(0, int(round(crop_h * jitter_ratio)))
     jitter_x = max(0, int(round(crop_w * jitter_ratio)))
-    top = center_y - crop_h // 2 + (random.randint(-jitter_y, jitter_y) if jitter_y > 0 else 0)
-    left = center_x - crop_w // 2 + (random.randint(-jitter_x, jitter_x) if jitter_x > 0 else 0)
+    top = (
+        center_y
+        - crop_h // 2
+        + (random.randint(-jitter_y, jitter_y) if jitter_y > 0 else 0)
+    )
+    left = (
+        center_x
+        - crop_w // 2
+        + (random.randint(-jitter_x, jitter_x) if jitter_x > 0 else 0)
+    )
 
     return max(0, min(top, max_top)), max(0, min(left, max_left))
 
+
 class MixedCropTransform(A.DualTransform):
-    def __init__(self, width, height, rare_classes: Sequence[int], rare_prob: float = 0.5, p: float = 1.0, debug_dir: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        width,
+        height,
+        rare_classes: Sequence[int],
+        rare_prob: float = 0.5,
+        p: float = 1.0,
+        debug_dir: Optional[str] = None,
+    ) -> None:
         super().__init__(p=p)
         self.width = width
         self.height = height
@@ -71,7 +90,9 @@ class MixedCropTransform(A.DualTransform):
     def targets_as_params(self) -> list[str]:
         return ["mask"]
 
-    def get_params_dependent_on_data(self, params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    def get_params_dependent_on_data(
+        self, params: dict[str, Any], data: dict[str, Any]
+    ) -> dict[str, Any]:
         mask = np.asarray(data["mask"])
         if mask.ndim > 2:
             mask = np.squeeze(mask)
@@ -97,9 +118,13 @@ class MixedCropTransform(A.DualTransform):
                     int(xs[index]),
                 )
             else:
-                top, left = _sample_crop_top_left(height + pad_h, width + pad_w, self.height, self.width)
+                top, left = _sample_crop_top_left(
+                    height + pad_h, width + pad_w, self.height, self.width
+                )
         else:
-            top, left = _sample_crop_top_left(height + pad_h, width + pad_w, self.height, self.width)
+            top, left = _sample_crop_top_left(
+                height + pad_h, width + pad_w, self.height, self.width
+            )
 
         return {
             "top": top,
@@ -125,7 +150,7 @@ class MixedCropTransform(A.DualTransform):
         crop = _crop_with_padding(image, top, left, crop_h, crop_w, pad_h, pad_w, 0)
         # if self.debug_dir is not None:
         #     self._save_debug_crop(crop, kind="image")
-        
+
         return crop
 
     def apply_to_mask(
@@ -140,14 +165,16 @@ class MixedCropTransform(A.DualTransform):
         fill_value: int = 0,
         **params: Any,
     ) -> np.ndarray:
-        crop = _crop_with_padding(mask, top, left, crop_h, crop_w, pad_h, pad_w, fill_value)
+        crop = _crop_with_padding(
+            mask, top, left, crop_h, crop_w, pad_h, pad_w, fill_value
+        )
         if self.debug_dir is not None:
             self._save_debug_crop(crop, kind="mask")
         return crop
 
     def get_transform_init_args_names(self) -> tuple[str, ...]:
         return ("rare_prob",)
-    
+
     def _mask_to_rgb(self, mask: np.ndarray) -> np.ndarray:
         palette = np.array(list(label_dict.values()), dtype=np.uint8)
         mask_array = np.asarray(mask)
@@ -166,4 +193,6 @@ class MixedCropTransform(A.DualTransform):
         if save_array.dtype != np.uint8:
             save_array = np.clip(save_array, 0, 255).astype(np.uint8)
 
-        Image.fromarray(save_array).save(debug_path / f"{kind}_{random.randint(0, 999999)}.png")
+        Image.fromarray(save_array).save(
+            debug_path / f"{kind}_{random.randint(0, 999999)}.png"
+        )
