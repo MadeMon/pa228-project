@@ -24,13 +24,13 @@ CONFIG: dict[str, Any] = {
     ],
     "num_classes": len(label_dict),
     "batch_size": 64,
-    "epochs": 100,
+    "epochs": 50,
     "learning_rate": 3e-4,  # 1e-3
     "class_ignore_index": 0,  # 0 is the "void" class
     "model_checkpoint_path": Path("models"),
     "debug_dir_rare_crops": None,  # "debug_rare_crops", None
     "preload_samples": True,
     "network": MobilnetASPP(len(label_dict)),
-    "warmup_ratio": 0.4,
+    "warmup_ratio": 0.04,
     "optimizer_weight_decay": 1e-4,
 }

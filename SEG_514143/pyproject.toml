@@ -6,20 +6,20 @@ authors = [
     {name = "Matěj Kubík", email = "matej.kubik@mail.muni.cz"},
 ]
 dependencies = [
-    "graphviz",
-    "matplotlib",
-    "numpy",
-    "pillow",
-    "torch==2.10.*",
-    "torchview",
-    "pandas",
-    "albumentations",
-    "tqdm",
-    "torchvision==0.25.*",
-    "mlflow",
-    "types-tqdm>=4.67.3.20260408",
-    "databricks-sdk>=0.105.0",
-    "python-dotenv>=1.2.2",
+    "graphviz==0.21",
+    "matplotlib==3.10.9",
+    "numpy==2.4.4",
+    "pillow==12.2.0",
+    "torch==2.10.0",
+    "torchview==0.2.7",
+    "pandas==2.3.3",
+    "albumentations==2.0.8",
+    "tqdm==4.67.3",
+    "torchvision==0.25.0",
+    "mlflow==3.11.1",
+    "types-tqdm==4.67.3.20260408",
+    "databricks-sdk==0.105.0",
+    "python-dotenv==1.2.2",
 ]
 requires-python = "==3.12.*"
 readme = "README.md"
@@ -37,4 +37,4 @@ distribution = false
 [tool.pdm.scripts]
 train = "python training.py data_seg_public"
 mlflow = "mlflow server --host 127.0.0.1 --port 5000"
-infer = "python inference.py data_seg_public models/ModelCustom_opt_AdamW_crop_512_best.pt"
+infer = "python inference.py data_seg_public model.pt"
