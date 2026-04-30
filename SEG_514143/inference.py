@@ -60,9 +60,12 @@ def inference(dataset_path: Path, model_path: Path) -> None:
     # find all images in the dataset
     img_dir = dataset_path / "img"
     if not img_dir.exists():
+        img_dir = dataset_path  # fallback to dataset_path if img subdirectory doesn't exist
+    
+    if not img_dir.exists():
         print(f"Error: Image directory not found at {img_dir}")
         return
-    image_files = list(img_dir.rglob("*_leftImg8bit.png"))
+    image_files = list(img_dir.rglob("*.png"))
     if not image_files:
         print(f"No images found in {img_dir}")
         return
